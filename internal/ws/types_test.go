@@ -94,7 +94,6 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 }
 
 func TestRecallRoundTrip(t *testing.T) {
-	// Simulate recall request and notification round-trip.
 	recallPayload := MessageRecallPayload{MessageID: "msg-abc"}
 	req, _ := NewEnvelope(TypeMessageRecall, recallPayload)
 	data, _ := json.Marshal(req)
@@ -115,6 +114,27 @@ func TestRecallRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGroupMessageRoundTrip(t *testing.T) {
+	payload := GroupMessageSendPayload{GroupID: "group-1", Content: "hello group"}
+	req, _ := NewEnvelope(TypeGroupMessageSend, payload)
+	data, _ := json.Marshal(req)
+
+	var received Envelope
+	if err := json.Unmarshal(data, &received); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if received.Type != TypeGroupMessageSend {
+		t.Errorf("expected %s, got %s", TypeGroupMessageSend, received.Type)
+	}
+	var decoded GroupMessageSendPayload
+	if err := json.Unmarshal(received.Payload, &decoded); err != nil {
+		t.Fatalf("payload unmarshal error: %v", err)
+	}
+	if decoded.GroupID != "group-1" {
+		t.Errorf("expected group-1, got %s", decoded.GroupID)
+	}
+}
+
 func TestMessageTypeConstants(t *testing.T) {
 	// Ensure message type constants are distinct — a typo could make two
 	// types equal, which would break type-switch dispatch in message handlers.
@@ -122,10 +142,13 @@ func TestMessageTypeConstants(t *testing.T) {
 	types := []MessageType{
 		TypeMessageSend,
 		TypeMessageRecall,
+		TypeGroupMessageSend,
 		TypePing,
 		TypeMessageNew,
 		TypeMessageAck,
 		TypeMessageRecalled,
+		TypeGroupMessageNew,
+		TypeGroupMessageAck,
 		TypePong,
 		TypeError,
 	}

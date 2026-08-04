@@ -17,6 +17,7 @@ func Setup(
 	healthHandler *handler.HealthHandler,
 	presenceHandler *handler.PresenceHandler,
 	messageHandler *handler.MessageHandler,
+	groupHandler *handler.GroupHandler,
 	authService *service.AuthService,
 	wsHandler *gateway.Handler,
 ) *gin.Engine {
@@ -70,6 +71,19 @@ func Setup(
 			{
 				messages.GET("", messageHandler.GetConversation)
 				messages.POST("", messageHandler.SendMessage)
+			}
+
+			groups := protected.Group("/groups")
+			{
+				groups.POST("", groupHandler.Create)
+				groups.GET("", groupHandler.ListMyGroups)
+				groups.GET("/:id", groupHandler.Get)
+				groups.PUT("/:id", groupHandler.UpdateName)
+				groups.DELETE("/:id", groupHandler.Delete)
+				groups.POST("/:id/members", groupHandler.AddMembers)
+				groups.DELETE("/:id/members/:uid", groupHandler.RemoveMember)
+				groups.GET("/:id/members", groupHandler.ListMembers)
+				groups.GET("/:id/messages", groupHandler.GetMessages)
 			}
 		}
 	}

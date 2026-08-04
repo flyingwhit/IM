@@ -15,14 +15,17 @@ type MessageType string
 
 const (
 	// Client → Server
-	TypeMessageSend   MessageType = "message.send"   // send a private message
-	TypeMessageRecall MessageType = "message.recall"  // recall (撤回) a sent message
-	TypePing          MessageType = "ping"            // heartbeat
+	TypeMessageSend      MessageType = "message.send"       // send a private message
+	TypeMessageRecall    MessageType = "message.recall"     // recall a sent message
+	TypeGroupMessageSend MessageType = "group.message.send" // send a group message
+	TypePing             MessageType = "ping"               // heartbeat
 
 	// Server → Client
-	TypeMessageNew      MessageType = "message.new"      // incoming message from another user
+	TypeMessageNew      MessageType = "message.new"      // incoming private message
 	TypeMessageAck      MessageType = "message.ack"      // delivery confirmation
 	TypeMessageRecalled MessageType = "message.recalled" // notification that a message was recalled
+	TypeGroupMessageNew MessageType = "group.message.new" // incoming group message
+	TypeGroupMessageAck MessageType = "group.message.ack" // group message confirmation
 	TypePong            MessageType = "pong"             // heartbeat response
 	TypeError           MessageType = "error"            // server-side error
 )
@@ -49,16 +52,23 @@ type MessageRecallPayload struct {
 	MessageID string `json:"message_id"` // ID of the message to recall
 }
 
+// GroupMessageSendPayload is sent by a client to send a message to a group.
+type GroupMessageSendPayload struct {
+	GroupID     string `json:"group_id"`
+	Content     string `json:"content"`
+	ContentType string `json:"content_type,omitempty"` // "text" (default)
+}
+
 // --- Server → Client payloads ---
 
-// MessageNewPayload is sent to the receiver when a new message arrives.
+// MessageNewPayload is sent to the receiver when a new private message arrives.
 type MessageNewPayload struct {
 	ID          string `json:"id"`
 	From        string `json:"from"` // sender user ID
 	Content     string `json:"content"`
 	ContentType string `json:"content_type,omitempty"`
-	CreatedAt   string `json:"created_at"`             // ISO 8601
-	RecalledAt  string `json:"recalled_at,omitempty"`  // ISO 8601, set only when recalled
+	CreatedAt   string `json:"created_at"`            // ISO 8601
+	RecalledAt  string `json:"recalled_at,omitempty"` // ISO 8601, set only when recalled
 }
 
 // MessageAckPayload confirms delivery status back to the sender.
@@ -72,6 +82,22 @@ type MessageAckPayload struct {
 type MessageRecalledPayload struct {
 	MessageID  string `json:"message_id"`
 	RecalledAt string `json:"recalled_at"` // ISO 8601
+}
+
+// GroupMessageNewPayload is broadcast to group members when a group message arrives.
+type GroupMessageNewPayload struct {
+	ID          string `json:"id"`
+	GroupID     string `json:"group_id"`
+	From        string `json:"from"` // sender user ID
+	Content     string `json:"content"`
+	ContentType string `json:"content_type,omitempty"`
+	CreatedAt   string `json:"created_at"` // ISO 8601
+}
+
+// GroupMessageAckPayload confirms that a group message was processed.
+type GroupMessageAckPayload struct {
+	ID      string `json:"id"`
+	GroupID string `json:"group_id"`
 }
 
 // ErrorPayload carries server-side error details.

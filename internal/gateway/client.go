@@ -67,9 +67,8 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID string, connID string) *Cl
 // closes the send channel, which causes writePump to exit.
 //
 // Message dispatch:
-//   - message.send   → Hub.OnMessage callback (set by composition root)
-//   - message.recall → Hub.OnMessage callback
-//   - ping           → pong response
+//   - message.send / message.recall / group.message.send → Hub.OnMessage
+//   - ping → pong response
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
@@ -101,11 +100,7 @@ func (c *Client) readPump() {
 		}
 
 		switch env.Type {
-		case ws.TypeMessageSend:
-			if c.hub.OnMessage != nil {
-				c.hub.OnMessage(c.userID, message)
-			}
-		case ws.TypeMessageRecall:
+		case ws.TypeMessageSend, ws.TypeMessageRecall, ws.TypeGroupMessageSend:
 			if c.hub.OnMessage != nil {
 				c.hub.OnMessage(c.userID, message)
 			}
@@ -158,6 +153,8 @@ func (c *Client) writePump() {
 				log.Printf("ws ping error: %v (user=%s, conn=%s)", err, c.userID, c.connID)
 				return
 			}
+			// Refresh Redis presence TTL so long-lived connections
+			// don't appear offline due to key expiry.
 			c.hub.RefreshPresence(c.userID)
 		}
 	}

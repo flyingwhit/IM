@@ -125,38 +125,6 @@ func (r *MessageRepo) UpdateStatus(ctx context.Context, msgID string, status mod
 	return err
 }
 
-// FindRecalledAfterDelivered returns messages that were delivered to the user
-// and later recalled, within the given time window (since parameter).
-// These are used to push message.recalled notifications on reconnect —
-// the receiver already has the message but missed the real-time recall event.
-func (r *MessageRepo) FindRecalledAfterDelivered(ctx context.Context, userID string, since time.Time) ([]model.Message, error) {
-	const query = `
-		SELECT id, sender_id, receiver_id, content, content_type, status, created_at, recalled_at
-		FROM messages
-		WHERE receiver_id = $1
-		  AND status IN ('delivered', 'read')
-		  AND recalled_at IS NOT NULL
-		  AND recalled_at > $2
-		ORDER BY recalled_at ASC
-	`
-	rows, err := r.pool.Query(ctx, query, userID, since)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var messages []model.Message
-	for rows.Next() {
-		var m model.Message
-		if err := rows.Scan(&m.ID, &m.SenderID, &m.ReceiverID, &m.Content,
-			&m.ContentType, &m.Status, &m.CreatedAt, &m.RecalledAt); err != nil {
-			return nil, err
-		}
-		messages = append(messages, m)
-	}
-	return messages, rows.Err()
-}
-
 // UpdateRecall marks a message as recalled by setting recalled_at to now.
 // Returns the number of rows affected (0 means the message was not found).
 func (r *MessageRepo) UpdateRecall(ctx context.Context, msgID string) error {
@@ -169,6 +137,34 @@ func (r *MessageRepo) UpdateRecall(ctx context.Context, msgID string) error {
 		return model.NewAppError(model.ErrNotFound, "message not found or already recalled")
 	}
 	return nil
+}
+
+// FindRecalledAfterDelivered returns messages that were delivered to the user
+// and then recalled within a recent window. Called on reconnect to push
+// recall notifications for messages the client has already displayed.
+func (r *MessageRepo) FindRecalledAfterDelivered(ctx context.Context, userID string, since time.Time) ([]model.Message, error) {
+	const query = `
+		SELECT id, sender_id, receiver_id, content, content_type, status, created_at, recalled_at
+		FROM messages
+		WHERE receiver_id = $1 AND status = $2 AND recalled_at IS NOT NULL AND recalled_at > $3
+		ORDER BY recalled_at ASC
+	`
+	rows, err := r.pool.Query(ctx, query, userID, model.MessageStatusDelivered, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []model.Message
+	for rows.Next() {
+		var m model.Message
+		if err := rows.Scan(&m.ID, &m.SenderID, &m.ReceiverID, &m.Content,
+			&m.ContentType, &m.Status, &m.CreatedAt, &m.RecalledAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
 }
 
 // UpdateStatusTx is like UpdateStatus but runs on an existing transaction.

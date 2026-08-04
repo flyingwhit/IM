@@ -54,6 +54,8 @@ func run() error {
 	userRepo := postgres.NewUserRepo(pool)
 	friendRepo := postgres.NewFriendRepo(pool)
 	messageRepo := postgres.NewMessageRepo(pool)
+	groupRepo := postgres.NewGroupRepo(pool)
+	groupMessageRepo := postgres.NewGroupMessageRepo(pool)
 	sessionRepo := redisrepo.NewSessionRepo(redisClient)
 	presenceRepo := redisrepo.NewPresenceRepo(redisClient)
 
@@ -64,7 +66,8 @@ func run() error {
 	// Services
 	authService := service.NewAuthService(userRepo, sessionRepo, cfg.JWT)
 	friendService := service.NewFriendService(friendRepo, userRepo)
-	messageService := service.NewMessageService(messageRepo, friendRepo, hub)
+	messageService := service.NewMessageService(messageRepo, friendRepo, groupRepo, groupMessageRepo, hub)
+	groupService := service.NewGroupService(groupRepo, userRepo, groupMessageRepo)
 
 	// Wire Hub callbacks so WebSocket frames are dispatched to MessageService.
 	hub.OnMessage = messageService.HandleIncomingMessage
@@ -78,9 +81,10 @@ func run() error {
 	wsHandler := gateway.NewHandler(authService, hub)
 	presenceHandler := handler.NewPresenceHandler(hub, presenceRepo)
 	messageHandler := handler.NewMessageHandler(messageService)
+	groupHandler := handler.NewGroupHandler(groupService, messageService)
 
 	// Router
-	r := router.Setup(authHandler, userHandler, friendHandler, healthHandler, presenceHandler, messageHandler, authService, wsHandler)
+	r := router.Setup(authHandler, userHandler, friendHandler, healthHandler, presenceHandler, messageHandler, groupHandler, authService, wsHandler)
 
 	// HTTP server
 	srv := &http.Server{

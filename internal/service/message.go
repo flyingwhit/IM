@@ -31,6 +31,17 @@ type friendChecker interface {
 	FindByUserAndFriend(ctx context.Context, userID, friendID string) (*model.Friend, error)
 }
 
+// groupMemberStore is the subset of postgres.GroupRepo needed for group message routing.
+type groupMemberStore interface {
+	IsMember(ctx context.Context, groupID, userID string) (bool, error)
+	ListMembers(ctx context.Context, groupID string) ([]model.GroupMember, error)
+}
+
+// groupMessageStore is the subset of postgres.GroupMessageRepo needed for group messages.
+type groupMessageStore interface {
+	Insert(ctx context.Context, msg *model.GroupMessage) error
+}
+
 const (
 	// maxContentLength limits message content to prevent abuse.
 	// 10000 chars is ~10 KB — enough for long messages without enabling
@@ -61,9 +72,11 @@ const (
 // interface rather than the concrete gateway.Hub type. This avoids a
 // circular import between the service and gateway packages.
 type MessageService struct {
-	messageRepo messageStore
-	friendRepo  friendChecker
-	router      MessageRouter
+	messageRepo      messageStore
+	friendRepo       friendChecker
+	groupMemberRepo  groupMemberStore
+	groupMessageRepo groupMessageStore
+	router           MessageRouter
 }
 
 // NewMessageService creates a MessageService.
@@ -72,12 +85,16 @@ type MessageService struct {
 func NewMessageService(
 	messageRepo *postgres.MessageRepo,
 	friendRepo *postgres.FriendRepo,
+	groupMemberRepo *postgres.GroupRepo,
+	groupMessageRepo *postgres.GroupMessageRepo,
 	router MessageRouter,
 ) *MessageService {
 	return &MessageService{
-		messageRepo: messageRepo,
-		friendRepo:  friendRepo,
-		router:      router,
+		messageRepo:      messageRepo,
+		friendRepo:       friendRepo,
+		groupMemberRepo:  groupMemberRepo,
+		groupMessageRepo: groupMessageRepo,
+		router:           router,
 	}
 }
 
@@ -101,6 +118,8 @@ func (s *MessageService) HandleIncomingMessage(senderID string, raw []byte) {
 		s.handleSend(senderID, env)
 	case ws.TypeMessageRecall:
 		s.handleRecall(senderID, env)
+	case ws.TypeGroupMessageSend:
+		s.handleGroupSend(senderID, env)
 	default:
 		log.Printf("msg: unexpected type %s from user %s", env.Type, senderID)
 	}
@@ -186,6 +205,94 @@ func (s *MessageService) handleSend(senderID string, env ws.Envelope) {
 	// whether the receiver was online at delivery time. Using msg.Status
 	// avoids a TOCTOU race between delivery and this check.
 	s.sendAck(senderID, msg.ID, msg.Status)
+}
+
+// handleGroupSend processes a group.message.send envelope.
+//
+// Flow:
+//  1. Parse the payload
+//  2. Validate content (same rules as private messages)
+//  3. Check membership
+//  4. Persist to group_messages table
+//  5. List group members → deliver to each online member (except sender)
+//  6. Send ACK back to sender
+func (s *MessageService) handleGroupSend(senderID string, env ws.Envelope) {
+	ctx := context.Background()
+
+	var payload ws.GroupMessageSendPayload
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		log.Printf("group msg: payload parse error from user %s: %v", senderID, err)
+		s.sendError(senderID, "parse_error", "invalid payload")
+		return
+	}
+
+	// Reuse the private-message validation (checks content length, defaults).
+	// GroupID is validated by checking membership below.
+	p := &ws.MessageSendPayload{To: payload.GroupID, Content: payload.Content, ContentType: payload.ContentType}
+	if err := s.validate(p); err != nil {
+		s.sendError(senderID, "invalid_message", err.Error())
+		return
+	}
+	payload.Content = p.Content
+	payload.ContentType = p.ContentType
+
+	// 3. Check membership — sender must be a group member.
+	isMember, err := s.groupMemberRepo.IsMember(ctx, payload.GroupID, senderID)
+	if err != nil {
+		log.Printf("group msg: check member error: %v", err)
+		s.sendError(senderID, "server_error", "failed to verify membership")
+		return
+	}
+	if !isMember {
+		s.sendError(senderID, "not_member", "you are not a member of this group")
+		return
+	}
+
+	// 4. Persist (persist-first, same as private messages).
+	msg := &model.GroupMessage{
+		GroupID:     payload.GroupID,
+		SenderID:    senderID,
+		Content:     payload.Content,
+		ContentType: payload.ContentType,
+	}
+	if err := s.groupMessageRepo.Insert(ctx, msg); err != nil {
+		log.Printf("group msg: insert error for user %s: %v", senderID, err)
+		s.sendError(senderID, "server_error", "failed to save message")
+		return
+	}
+
+	log.Printf("group msg: %s from %s to group %s", truncate(msg.ID), senderID, payload.GroupID)
+
+	// 5. Route to online members (except the sender).
+	members, err := s.groupMemberRepo.ListMembers(ctx, payload.GroupID)
+	if err != nil {
+		log.Printf("group msg: list members error for group %s: %v", payload.GroupID, err)
+		// The message is persisted — members will see it via history API.
+	} else {
+		env := ws.MustEnvelope(ws.TypeGroupMessageNew, ws.GroupMessageNewPayload{
+			ID:          msg.ID,
+			GroupID:     msg.GroupID,
+			From:        msg.SenderID,
+			Content:     msg.Content,
+			ContentType: msg.ContentType,
+			CreatedAt:   msg.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+		for _, m := range members {
+			if m.UserID == senderID {
+				continue // Don't echo back to sender.
+			}
+			if s.router.IsOnline(m.UserID) {
+				s.router.SendToUser(m.UserID, env)
+			}
+		}
+	}
+
+	// 6. Send ACK.
+	ackEnv := ws.MustEnvelope(ws.TypeGroupMessageAck, ws.GroupMessageAckPayload{
+		ID:      msg.ID,
+		GroupID: msg.GroupID,
+	})
+	s.router.SendToUser(senderID, ackEnv)
 }
 
 // handleRecall processes a message.recall envelope.
