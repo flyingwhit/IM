@@ -135,12 +135,13 @@ func (s *MessageService) SendMessage(ctx context.Context, senderID, to, content,
 	if err := s.messageRepo.Insert(ctx, msg); err != nil {
 		return nil, fmt.Errorf("insert message: %w", err)
 	}
+	msg.Status = model.MessageStatusSent
 
 	log.Printf("msg: %s from %s to %s", truncate(msg.ID), senderID, to)
 
 	// 4. Route to receiver
-	delivered := s.deliverToUser(to, msg)
-	if delivered {
+	if s.deliverToUser(to, msg) {
+		msg.Status = model.MessageStatusDelivered
 		if err := s.messageRepo.UpdateStatus(ctx, msg.ID, model.MessageStatusDelivered); err != nil {
 			log.Printf("msg: update status error: %v", err)
 		}
@@ -181,12 +182,10 @@ func (s *MessageService) handleSend(senderID string, env ws.Envelope) {
 		return
 	}
 
-	// Determine ACK status: delivered if receiver was online, sent otherwise.
-	status := model.MessageStatusSent
-	if s.router.IsOnline(payload.To) {
-		status = model.MessageStatusDelivered
-	}
-	s.sendAck(senderID, msg.ID, status)
+	// ACK status comes from SendMessage, which already determined
+	// whether the receiver was online at delivery time. Using msg.Status
+	// avoids a TOCTOU race between delivery and this check.
+	s.sendAck(senderID, msg.ID, msg.Status)
 }
 
 // handleRecall processes a message.recall envelope.

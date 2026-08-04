@@ -714,6 +714,126 @@ func TestMessageService_GetConversation_MasksRecalledContent(t *testing.T) {
 	}
 }
 
+// --- SendMessage (REST API) tests ---
+
+func TestMessageService_SendMessage_StatusSent(t *testing.T) {
+	friends := newFakeFriendChecker()
+	friends.addFriend("alice", "bob")
+	router := newFakeRouter()
+	// bob is NOT online
+	svc := mustMessageService(router, friends)
+
+	msg, err := svc.SendMessage(context.Background(), "alice", "bob", "hello", "text")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Status != model.MessageStatusSent {
+		t.Errorf("status = %s, want %s (receiver offline)", msg.Status, model.MessageStatusSent)
+	}
+}
+
+func TestMessageService_SendMessage_StatusDelivered(t *testing.T) {
+	friends := newFakeFriendChecker()
+	friends.addFriend("alice", "bob")
+	router := newFakeRouter()
+	router.online["bob"] = true
+	svc := mustMessageService(router, friends)
+
+	msg, err := svc.SendMessage(context.Background(), "alice", "bob", "hello", "text")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Status != model.MessageStatusDelivered {
+		t.Errorf("status = %s, want %s (receiver online)", msg.Status, model.MessageStatusDelivered)
+	}
+}
+
+func TestMessageService_SendMessage_SelfMessage(t *testing.T) {
+	router := newFakeRouter()
+	router.online["alice"] = true
+	svc := mustMessageService(router, newFakeFriendChecker())
+
+	msg, err := svc.SendMessage(context.Background(), "alice", "alice", "note to self", "text")
+	if err != nil {
+		t.Fatalf("self-message should succeed: %v", err)
+	}
+	if msg.SenderID != "alice" || msg.ReceiverID != "alice" {
+		t.Error("self-message should have same sender and receiver")
+	}
+	// Self-message delivered instantly since sender is online.
+	if msg.Status != model.MessageStatusDelivered {
+		t.Errorf("status = %s, want %s (self-message, online)", msg.Status, model.MessageStatusDelivered)
+	}
+}
+
+func TestMessageService_SendMessage_NotFriends(t *testing.T) {
+	friends := newFakeFriendChecker()
+	router := newFakeRouter()
+	svc := mustMessageService(router, friends)
+
+	_, err := svc.SendMessage(context.Background(), "alice", "bob", "hello", "text")
+	if err == nil {
+		t.Fatal("expected error for non-friends")
+	}
+}
+
+func TestMessageService_SendMessage_EmptyContent(t *testing.T) {
+	friends := newFakeFriendChecker()
+	friends.addFriend("alice", "bob")
+	router := newFakeRouter()
+	svc := mustMessageService(router, friends)
+
+	_, err := svc.SendMessage(context.Background(), "alice", "bob", "   ", "text")
+	if err == nil {
+		t.Fatal("expected error for empty content")
+	}
+}
+
+func TestMessageService_HandleSend_AckMatchesSendMessageStatus(t *testing.T) {
+	// The ACK status should always match what SendMessage determined,
+	// regardless of any later online-status changes.
+	friends := newFakeFriendChecker()
+	friends.addFriend("alice", "bob")
+
+	t.Run("receiver online → ack delivered", func(t *testing.T) {
+		router := newFakeRouter()
+		router.online["bob"] = true
+		svc := mustMessageService(router, friends)
+
+		raw := makeMessageSend("bob", "hello")
+		svc.HandleIncomingMessage("alice", raw)
+
+		ack := router.lastEnvelope("alice")
+		if ack == nil {
+			t.Fatal("alice should receive an ACK")
+		}
+		var ackPayload ws.MessageAckPayload
+		json.Unmarshal(ack.Payload, &ackPayload)
+		if ackPayload.Status != string(model.MessageStatusDelivered) {
+			t.Errorf("ack status = %s, want %s", ackPayload.Status, model.MessageStatusDelivered)
+		}
+	})
+
+	t.Run("receiver offline → ack sent", func(t *testing.T) {
+		router := newFakeRouter()
+		// bob is NOT online
+		svc := mustMessageService(router, friends)
+
+		raw := makeMessageSend("bob", "hello")
+		svc.HandleIncomingMessage("alice", raw)
+
+		ack := router.lastEnvelope("alice")
+		if ack == nil {
+			t.Fatal("alice should receive an ACK")
+		}
+		var ackPayload ws.MessageAckPayload
+		json.Unmarshal(ack.Payload, &ackPayload)
+		if ackPayload.Status != string(model.MessageStatusSent) {
+			t.Errorf("ack status = %s, want %s", ackPayload.Status, model.MessageStatusSent)
+		}
+	})
+}
+
 // Compile-time interface satisfaction checks.
 var _ messageStore = (*fakeMessageStore)(nil)
 var _ friendChecker = (*fakeFriendChecker)(nil)
