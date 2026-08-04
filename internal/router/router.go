@@ -52,6 +52,7 @@ func Setup(
 			{
 				users.GET("/me", userHandler.GetProfile)
 				users.PUT("/me", userHandler.UpdateProfile)
+				users.GET("/:id", userHandler.GetUser)
 				users.GET("/:id/online", presenceHandler.GetOnlineStatus)
 			}
 
@@ -68,6 +69,7 @@ func Setup(
 			messages := protected.Group("/messages")
 			{
 				messages.GET("", messageHandler.GetConversation)
+				messages.POST("", messageHandler.SendMessage)
 			}
 		}
 	}

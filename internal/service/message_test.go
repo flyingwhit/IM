@@ -65,6 +65,10 @@ func (r *fakeMessageStore) FindUndelivered(_ context.Context, _ string) ([]model
 	return nil, nil
 }
 
+func (r *fakeMessageStore) FindRecalledAfterDelivered(_ context.Context, _ string, _ time.Time) ([]model.Message, error) {
+	return nil, nil
+}
+
 func (r *fakeMessageStore) UpdateStatus(_ context.Context, msgID string, status model.MessageStatus) error {
 	if r.updateStatusFn != nil {
 		return r.updateStatusFn(msgID, status)

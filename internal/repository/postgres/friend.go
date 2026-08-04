@@ -100,9 +100,9 @@ func (r *FriendRepo) DeleteTx(ctx context.Context, tx pgx.Tx, id string) error {
 	return err
 }
 
-// ListFriends returns all accepted friends for a user.
+// ListFriends returns accepted friends for a user with pagination.
 // It JOINs the users table to return friend info directly.
-func (r *FriendRepo) ListFriends(ctx context.Context, userID string) ([]model.FriendWithUser, error) {
+func (r *FriendRepo) ListFriends(ctx context.Context, userID string, offset, limit int) ([]model.FriendWithUser, error) {
 	const query = `
 		SELECT f.id, f.user_id, f.friend_id, f.status, f.created_at, f.updated_at,
 			   u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_url, u.created_at, u.updated_at
@@ -110,12 +110,14 @@ func (r *FriendRepo) ListFriends(ctx context.Context, userID string) ([]model.Fr
 		JOIN users u ON u.id = f.friend_id
 		WHERE f.user_id = $1 AND f.status = 'accepted'
 		ORDER BY u.username
+		LIMIT $2 OFFSET $3
 	`
-	return r.queryFriends(ctx, query, userID)
+	return r.queryFriends(ctx, query, userID, limit, offset)
 }
 
-// ListPendingRequests returns pending friend requests received by the user.
-func (r *FriendRepo) ListPendingRequests(ctx context.Context, userID string) ([]model.FriendWithUser, error) {
+// ListPendingRequests returns pending friend requests received by the user,
+// with pagination.
+func (r *FriendRepo) ListPendingRequests(ctx context.Context, userID string, offset, limit int) ([]model.FriendWithUser, error) {
 	const query = `
 		SELECT f.id, f.user_id, f.friend_id, f.status, f.created_at, f.updated_at,
 			   u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_url, u.created_at, u.updated_at
@@ -123,8 +125,9 @@ func (r *FriendRepo) ListPendingRequests(ctx context.Context, userID string) ([]
 		JOIN users u ON u.id = f.user_id
 		WHERE f.friend_id = $1 AND f.status = 'pending'
 		ORDER BY f.created_at DESC
+		LIMIT $2 OFFSET $3
 	`
-	return r.queryFriends(ctx, query, userID)
+	return r.queryFriends(ctx, query, userID, limit, offset)
 }
 
 // UpdateStatusTx is like UpdateStatus but runs on an existing transaction.
@@ -152,8 +155,8 @@ func (r *FriendRepo) CreateTx(ctx context.Context, tx pgx.Tx, friend *model.Frie
 }
 
 // queryFriends runs a query that returns FriendWithUser rows.
-func (r *FriendRepo) queryFriends(ctx context.Context, query string, arg string) ([]model.FriendWithUser, error) {
-	rows, err := r.pool.Query(ctx, query, arg)
+func (r *FriendRepo) queryFriends(ctx context.Context, query string, args ...any) ([]model.FriendWithUser, error) {
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

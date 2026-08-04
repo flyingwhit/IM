@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -39,30 +40,53 @@ func (h *FriendHandler) SendRequest(c *gin.Context) {
 	c.JSON(http.StatusCreated, f)
 }
 
-// ListFriends handles GET /api/v1/friends
+// ListFriends handles GET /api/v1/friends?offset=0&limit=50.
+// Returns accepted friends with pagination.
 func (h *FriendHandler) ListFriends(c *gin.Context) {
 	userID := c.GetString(middleware.UserIDKey)
+	offset, limit := parsePagination(c)
 
-	friends, err := h.friendService.ListFriends(c.Request.Context(), userID)
+	friends, err := h.friendService.ListFriends(c.Request.Context(), userID, offset, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, friends)
+	c.JSON(http.StatusOK, gin.H{"friends": friends, "offset": offset, "limit": limit})
 }
 
-// ListPendingRequests handles GET /api/v1/friends/requests
+// ListPendingRequests handles GET /api/v1/friends/requests?offset=0&limit=50.
+// Returns incoming pending friend requests with pagination.
 func (h *FriendHandler) ListPendingRequests(c *gin.Context) {
 	userID := c.GetString(middleware.UserIDKey)
+	offset, limit := parsePagination(c)
 
-	requests, err := h.friendService.ListPendingRequests(c.Request.Context(), userID)
+	requests, err := h.friendService.ListPendingRequests(c.Request.Context(), userID, offset, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, requests)
+	c.JSON(http.StatusOK, gin.H{"requests": requests, "offset": offset, "limit": limit})
+}
+
+// parsePagination extracts offset and limit from query parameters.
+// Defaults: offset=0, limit=50. Max limit: 100.
+func parsePagination(c *gin.Context) (int, int) {
+	offset := 0
+	limit := 50
+
+	if o := c.Query("offset"); o != "" {
+		if n, err := strconv.Atoi(o); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	if l := c.Query("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	return offset, limit
 }
 
 // AcceptRequest handles PUT /api/v1/friends/requests/:id/accept

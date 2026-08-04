@@ -76,7 +76,7 @@ func run() error {
 	friendHandler := handler.NewFriendHandler(friendService)
 	healthHandler := handler.NewHealthHandler()
 	wsHandler := gateway.NewHandler(authService, hub)
-	presenceHandler := handler.NewPresenceHandler(presenceRepo)
+	presenceHandler := handler.NewPresenceHandler(hub, presenceRepo)
 	messageHandler := handler.NewMessageHandler(messageService)
 
 	// Router

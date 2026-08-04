@@ -21,6 +21,38 @@ func NewMessageHandler(messageService *service.MessageService) *MessageHandler {
 	return &MessageHandler{messageService: messageService}
 }
 
+// SendMessage handles POST /api/v1/messages.
+//
+// This is the REST fallback for sending messages. The primary channel is
+// WebSocket (message.send), but REST is useful for:
+//   - Mobile apps when the WebSocket is in background
+//   - Third-party integrations / bots
+//   - Testing
+//
+// The underlying logic is the same as the WebSocket handler: validate,
+// check friendship, persist, deliver if online.
+func (h *MessageHandler) SendMessage(c *gin.Context) {
+	userID := c.GetString(middleware.UserIDKey)
+
+	var req struct {
+		To          string `json:"to" binding:"required"`
+		Content     string `json:"content" binding:"required"`
+		ContentType string `json:"content_type,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	msg, err := h.messageService.SendMessage(c.Request.Context(), userID, req.To, req.Content, req.ContentType)
+	if err != nil {
+		c.JSON(errorStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, msg)
+}
+
 // GetConversation handles GET /api/v1/messages?peer=<user_id>&before=<cursor>&limit=50.
 //
 // Returns a paginated list of messages between the authenticated user and the peer.
