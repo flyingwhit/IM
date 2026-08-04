@@ -324,6 +324,83 @@ pre {
   margin-top: 8px;
 }
 
+/* === Session List === */
+.session-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  gap: 8px;
+  flex-wrap: wrap;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.session-row.active {
+  border-color: var(--primary);
+  background: rgba(74, 108, 247, 0.04);
+}
+
+.session-main {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.session-label {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.session-userid {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.session-token {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: #aaa;
+  word-break: break-all;
+}
+
+.session-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.badge-active {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: #d4edda;
+  color: #155724;
+  white-space: nowrap;
+}
+
+.btn-danger-outline {
+  background: none;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 3px 8px;
+  font-size: 0.75rem;
+}
+.btn-danger-outline:hover:not(:disabled) {
+  background: var(--danger);
+  color: #fff;
+}
+
 /* === Misc === */
 #session-info {
   font-size: 0.8rem;

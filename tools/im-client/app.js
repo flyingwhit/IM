@@ -5,33 +5,130 @@
 // No frameworks, no build tools — open index.html in a browser.
 //
 // Architecture:
-//   - State: stored in localStorage (tokens, server URL) and module globals
-//   - API:   central apiCall() function attaches JWT automatically
-//   - WS:    WebSocket client wraps native WebSocket with reconnection logic
-//   - UI:    direct DOM manipulation, no virtual DOM
+//   - Sessions: stored as a JSON array in localStorage (supports multiple users)
+//   - API:      central apiCall() attaches JWT of the active session automatically
+//   - WS:       WebSocket client wraps native WebSocket, one per active session
+//   - UI:       direct DOM manipulation, no virtual DOM
 // =============================================================================
 
-// --- State -------------------------------------------------------------------
+// --- Session Store -----------------------------------------------------------
+//
+// Sessions are stored in localStorage as:
+//   im_sessions:  JSON array of {id, label, userId, accessToken, refreshToken, expiresIn}
+//   im_active_id: string — ID of the currently active session
+//
+// This allows multiple users to be logged in simultaneously across tabs.
+// Each tab can independently switch its active session.
 
-const store = {
-  // Persisted (localStorage keys)
-  get serverUrl()  { return localStorage.getItem('im_server_url') || 'http://localhost:8080'; },
-  set serverUrl(v) { localStorage.setItem('im_server_url', v); },
-  get accessToken()  { return localStorage.getItem('im_access_token') || ''; },
-  set accessToken(v) { localStorage.setItem('im_access_token', v); },
-  get refreshToken()  { return localStorage.getItem('im_refresh_token') || ''; },
-  set refreshToken(v) { localStorage.setItem('im_refresh_token', v); },
-  get expiresIn()  { return parseInt(localStorage.getItem('im_expires_in') || '0'); },
-  set expiresIn(v) { localStorage.setItem('im_expires_in', String(v)); },
-  get userId()  { return localStorage.getItem('im_user_id') || ''; },
-  set userId(v) { localStorage.setItem('im_user_id', v); },
+const sessionStore = {
+  // Migrate old single-key format to new multi-session format.
+  // Runs once on first access, then is a no-op.
+  _migrate() {
+    if (localStorage.getItem('_im_migrated')) return;
+    const oldToken = localStorage.getItem('im_access_token');
+    if (oldToken) {
+      const session = {
+        id: 's_' + Date.now(),
+        label: localStorage.getItem('im_user_id') || 'unknown',
+        userId: localStorage.getItem('im_user_id') || '',
+        accessToken: oldToken,
+        refreshToken: localStorage.getItem('im_refresh_token') || '',
+        expiresIn: parseInt(localStorage.getItem('im_expires_in') || '0'),
+      };
+      ['im_access_token','im_refresh_token','im_expires_in','im_user_id'].forEach(
+        k => localStorage.removeItem(k));
+      localStorage.setItem('im_sessions', JSON.stringify([session]));
+      localStorage.setItem('im_active_id', session.id);
+    }
+    localStorage.setItem('_im_migrated', '1');
+  },
 
-  isLoggedIn() { return !!this.accessToken; },
+  /** @returns {Array<{id:string, label:string, userId:string, accessToken:string, refreshToken:string, expiresIn:number}>} */
+  getAll() {
+    this._migrate();
+    try { return JSON.parse(localStorage.getItem('im_sessions') || '[]'); }
+    catch (_) { return []; }
+  },
 
-  clear() {
-    ['im_access_token','im_refresh_token','im_expires_in','im_user_id'].forEach(k =>
-      localStorage.removeItem(k));
-  }
+  _saveAll(list) {
+    localStorage.setItem('im_sessions', JSON.stringify(list));
+  },
+
+  /** @returns {object|null} the active session, or null if none */
+  getActive() {
+    const list = this.getAll();
+    if (list.length === 0) return null;
+    const activeId = localStorage.getItem('im_active_id');
+    return list.find(s => s.id === activeId) || list[0];
+  },
+
+  /**
+   * Add a new session or update an existing one for the same userId.
+   * Automatically makes the session active.
+   */
+  upsert(label, userId, accessToken, refreshToken, expiresIn) {
+    const list = this.getAll();
+    const existing = list.find(s => s.userId === userId);
+    if (existing) {
+      existing.label = label;
+      existing.accessToken = accessToken;
+      existing.refreshToken = refreshToken;
+      existing.expiresIn = expiresIn;
+      localStorage.setItem('im_active_id', existing.id);
+    } else {
+      const session = {
+        id: 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        label,
+        userId,
+        accessToken,
+        refreshToken,
+        expiresIn,
+      };
+      list.push(session);
+      localStorage.setItem('im_active_id', session.id);
+    }
+    this._saveAll(list);
+  },
+
+  /** Remove a session by ID. If it was active, activate the most recent remaining session. */
+  remove(id) {
+    let list = this.getAll();
+    list = list.filter(s => s.id !== id);
+    this._saveAll(list);
+    if (localStorage.getItem('im_active_id') === id) {
+      const next = list.length > 0 ? list[list.length - 1] : null;
+      localStorage.setItem('im_active_id', next ? next.id : '');
+    }
+  },
+
+  /** Switch the active session to a different ID. */
+  setActive(id) {
+    localStorage.setItem('im_active_id', id);
+  },
+
+  /** True if there is an active session with a non-empty access token. */
+  isLoggedIn() {
+    const a = this.getActive();
+    return !!(a && a.accessToken);
+  },
+
+  // --- Convenience getters (read from active session) ---
+  get accessToken()  { return this.getActive()?.accessToken || ''; },
+  get refreshToken() { return this.getActive()?.refreshToken || ''; },
+  get expiresIn()    { return this.getActive()?.expiresIn || 0; },
+  get userId()       { return this.getActive()?.userId || ''; },
+
+  /** Remove all sessions. */
+  clearAll() {
+    localStorage.removeItem('im_sessions');
+    localStorage.removeItem('im_active_id');
+  },
+};
+
+// Server URL — not per-user, stored separately.
+const serverUrlStore = {
+  get() { return localStorage.getItem('im_server_url') || 'http://localhost:8080'; },
+  set(v) { localStorage.setItem('im_server_url', v); },
 };
 
 // --- Tab Switching -----------------------------------------------------------
@@ -50,7 +147,7 @@ function initTabs() {
 // --- Server Ping -------------------------------------------------------------
 
 async function pingServer() {
-  const url = store.serverUrl;
+  const url = serverUrlStore.get();
   const start = performance.now();
   try {
     const resp = await fetch(url + '/health');
@@ -77,20 +174,15 @@ function setServerStatus(status, label) {
 /**
  * Make an authenticated API call.
  *
- * Automatically attaches the Bearer token if the user is logged in.
+ * Automatically attaches the Bearer token of the active session.
  * Logs result to the response panel on the REST tab.
- *
- * @param {string} method  - HTTP method
- * @param {string} path    - URL path (e.g. "/api/v1/users/me")
- * @param {object|FormData|null} body - request body (JSON-serialized if plain object)
- * @returns {Promise<{ok: boolean, status: number, data: any, ms: number}>}
  */
 async function apiCall(method, path, body = null) {
-  const url = store.serverUrl + path;
+  const url = serverUrlStore.get() + path;
   const headers = {};
 
-  if (store.isLoggedIn()) {
-    headers['Authorization'] = 'Bearer ' + store.accessToken;
+  if (sessionStore.isLoggedIn()) {
+    headers['Authorization'] = 'Bearer ' + sessionStore.accessToken;
   }
 
   if (body && !(body instanceof FormData)) {
@@ -123,16 +215,12 @@ async function apiCall(method, path, body = null) {
   return { ok: resp.ok, status: resp.status, data, ms };
 }
 
-/**
- * Display API response in the response panel.
- */
 function showResponse(status, ms, body) {
   const panel = document.querySelector('.response-card');
   const statusEl = document.getElementById('resp-status');
   const timeEl = document.getElementById('resp-time');
   const bodyEl = document.getElementById('resp-body');
 
-  // Clear previous status classes
   panel.classList.remove('success', 'client-error', 'server-error', 'network-error');
 
   if (status === -1) {
@@ -148,7 +236,6 @@ function showResponse(status, ms, body) {
   timeEl.textContent = ms + 'ms';
   bodyEl.textContent = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
 
-  // Switch to REST tab to show the result
   document.querySelector('.tab-btn[data-tab="rest"]').click();
 }
 
@@ -165,7 +252,6 @@ async function handleRegister(e) {
   const { ok, data } = await apiCall('POST', '/api/v1/auth/register', body);
   if (ok) {
     form.reset();
-    // Pre-fill login form
     document.querySelector('#form-login [name="username"]').value = body.username;
   }
 }
@@ -173,50 +259,91 @@ async function handleRegister(e) {
 async function handleLogin(e) {
   e.preventDefault();
   const form = e.target;
-  const body = {
-    username: form.username.value.trim(),
-    password: form.password.value,
-  };
-  const { ok, data } = await apiCall('POST', '/api/v1/auth/login', body);
-  if (ok) {
-    store.accessToken = data.access_token;
-    store.refreshToken = data.refresh_token;
-    store.expiresIn = data.expires_in;
-    // Decode JWT to extract user ID (the payload is at index 1 of "xxx.yyy.zzz")
-    try {
-      const payload = JSON.parse(atob(data.access_token.split('.')[1]));
-      store.userId = payload.user_id;
-    } catch (_) { /* ignore decode failure */ }
-    form.reset();
-    updateSessionUI();
-  }
+  const username = form.username.value.trim();
+  const password = form.password.value;
+
+  const { ok, data } = await apiCall('POST', '/api/v1/auth/login', { username, password });
+  if (!ok) return;
+
+  // Decode JWT to extract user ID
+  let userId = '';
+  try {
+    const payload = JSON.parse(atob(data.access_token.split('.')[1]));
+    userId = payload.user_id;
+  } catch (_) { /* ignore decode failure */ }
+
+  // Upsert — updates existing session for this user, or adds a new one
+  sessionStore.upsert(username, userId, data.access_token, data.refresh_token, data.expires_in);
+
+  form.reset();
+  refreshSessionUI();
 }
 
 async function handleLogout() {
-  const body = { refresh_token: store.refreshToken };
-  await apiCall('POST', '/api/v1/auth/logout', body);
-  store.clear();
-  updateSessionUI();
+  const active = sessionStore.getActive();
+  if (!active) return;
+
+  // Best-effort: tell the server to invalidate the refresh token
+  try {
+    await apiCall('POST', '/api/v1/auth/logout', { refresh_token: active.refreshToken });
+  } catch (_) { /* server may be down or token expired — still clear locally */ }
+
+  sessionStore.remove(active.id);
+  disconnectWs();
+  refreshSessionUI();
   updateWsUI();
 }
 
-function updateSessionUI() {
-  const card = document.getElementById('session-card');
-  const info = document.getElementById('session-info');
+function switchSession(id) {
+  sessionStore.setActive(id);
+  disconnectWs();
+  refreshSessionUI();
+  updateWsUI();
+}
 
-  if (store.isLoggedIn()) {
-    card.style.display = '';
-    document.getElementById('sess-user-id').textContent = store.userId || '(unknown)';
-    document.getElementById('sess-access-token').textContent =
-      store.accessToken.substring(0, 30) + '...';
-    document.getElementById('sess-refresh-token').textContent =
-      store.refreshToken.substring(0, 30) + '...';
-    document.getElementById('sess-expires').textContent = store.expiresIn + 's';
-    info.textContent = 'Logged in: ' + (store.userId || '?');
-  } else {
-    card.style.display = 'none';
-    info.textContent = '';
+function removeSession(id) {
+  const active = sessionStore.getActive();
+  const wasActive = active && active.id === id;
+  sessionStore.remove(id);
+  if (wasActive) disconnectWs();
+  refreshSessionUI();
+  updateWsUI();
+}
+
+function refreshSessionUI() {
+  const container = document.getElementById('session-list');
+  const active = sessionStore.getActive();
+  const all = sessionStore.getAll();
+
+  if (all.length === 0) {
+    container.innerHTML = '<p class="hint">No active sessions. Register or login above.</p>';
+    document.getElementById('session-info').textContent = '';
+    return;
   }
+
+  let html = '';
+  for (const s of all) {
+    const isActive = active && s.id === active.id;
+    html += `
+      <div class="session-row ${isActive ? 'active' : ''}">
+        <div class="session-main">
+          <span class="session-label">${escapeHtml(s.label)}</span>
+          <span class="session-userid">${escapeHtml(s.userId.substring(0, 8))}...</span>
+          <span class="session-token">${escapeHtml(s.accessToken.substring(0, 16))}...</span>
+        </div>
+        <div class="session-actions">
+          ${isActive
+            ? '<span class="badge-active">active</span>'
+            : `<button class="btn btn-sm" onclick="switchSession('${s.id}')">Switch</button>`
+          }
+          <button class="btn btn-sm btn-danger-outline" onclick="removeSession('${s.id}')">✕</button>
+        </div>
+      </div>`;
+  }
+  container.innerHTML = html;
+
+  document.getElementById('session-info').textContent =
+    active ? 'Active: ' + active.label : '';
 }
 
 // --- REST API Button Handlers ------------------------------------------------
@@ -232,7 +359,6 @@ async function handleApiClick(btn) {
   let path = btn.dataset.path;
   let body = null;
 
-  // Handle path parameter substitution: {id} → value from input
   if (btn.dataset.pathParam) {
     const input = document.getElementById(btn.dataset.pathParam);
     if (!input || !input.value.trim()) {
@@ -242,7 +368,6 @@ async function handleApiClick(btn) {
     path = path.replace('{id}', input.value.trim());
   }
 
-  // Handle query parameters
   if (btn.dataset.query === 'msg-query') {
     const peer = document.getElementById('msg-peer').value.trim();
     const before = document.getElementById('msg-before').value.trim();
@@ -257,7 +382,6 @@ async function handleApiClick(btn) {
     path = path + '?' + params.toString();
   }
 
-  // Handle request body
   if (btn.dataset.body === 'update-profile') {
     const nickname = document.getElementById('update-nickname').value.trim();
     const avatar = document.getElementById('update-avatar').value.trim();
@@ -283,25 +407,21 @@ async function handleApiClick(btn) {
 // --- WebSocket Client --------------------------------------------------------
 
 let ws = null;
-let wsReconnectTimer = null;
 
 function getWsUrl() {
-  const httpUrl = store.serverUrl;
-  // Replace http:// → ws:// and https:// → wss://
+  const httpUrl = serverUrlStore.get();
   const wsUrl = httpUrl.replace(/^http/, 'ws');
-  return wsUrl + '/ws?token=' + store.accessToken;
+  return wsUrl + '/ws?token=' + sessionStore.accessToken;
 }
 
 function connectWs() {
-  if (!store.isLoggedIn()) {
-    wsLog('system', 'Cannot connect: not logged in. Please login first.');
+  if (!sessionStore.isLoggedIn()) {
+    wsLog('system', 'Cannot connect: no active session. Please login first.');
     return;
   }
 
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    wsLog('system', 'Already connected.');
-    return;
-  }
+  // Disconnect any existing WebSocket before opening a new one
+  if (ws) disconnectWs();
 
   const url = getWsUrl();
   wsLog('system', 'Connecting to ' + url.replace(/\?token=.*/, '?token=***'));
@@ -314,17 +434,14 @@ function connectWs() {
   }
 
   ws.onopen = () => {
-    wsLog('system', 'WebSocket connected.');
+    wsLog('system', 'WebSocket connected as ' + sessionStore.getActive()?.label);
     updateWsUI();
-    // Start heartbeat
     startHeartbeat();
   };
 
   ws.onmessage = (event) => {
     let env;
-    try {
-      env = JSON.parse(event.data);
-    } catch (_) {
+    try { env = JSON.parse(event.data); } catch (_) {
       wsLog('error', 'Received invalid JSON: ' + event.data);
       return;
     }
@@ -332,7 +449,7 @@ function connectWs() {
   };
 
   ws.onclose = (event) => {
-    wsLog('system', `WebSocket closed (code=${event.code}, reason="${event.reason}")`);
+    wsLog('system', `WebSocket closed (code=${event.code}, reason="${event.reason || ''}")`);
     stopHeartbeat();
     ws = null;
     updateWsUI();
@@ -344,22 +461,16 @@ function connectWs() {
 }
 
 function disconnectWs() {
-  if (wsReconnectTimer) {
-    clearInterval(wsReconnectTimer);
-    wsReconnectTimer = null;
-  }
   stopHeartbeat();
   if (ws) {
+    const wasOpen = ws.readyState === WebSocket.OPEN;
     ws.close(1000, 'User disconnected');
     ws = null;
+    if (wasOpen) wsLog('system', 'Disconnected.');
   }
-  wsLog('system', 'Disconnected.');
   updateWsUI();
 }
 
-/**
- * Handle an incoming WebSocket envelope.
- */
 function handleWsMessage(env) {
   switch (env.type) {
     case 'message.new':
@@ -368,15 +479,12 @@ function handleWsMessage(env) {
         ` (id=${env.payload.id})`);
       break;
     case 'message.ack':
-      wsLog('ack',
-        `Message ${env.payload.id}: ${env.payload.status}`);
+      wsLog('ack', `Message ${env.payload.id}: ${env.payload.status}`);
       break;
     case 'pong':
-      // Silently update heartbeat — only log if verbose
       break;
     case 'error':
-      wsLog('error',
-        `[${env.payload.code}] ${env.payload.message}`);
+      wsLog('error', `[${env.payload.code}] ${env.payload.message}`);
       break;
     default:
       wsLog('system', `Unknown message type: ${env.type}`);
@@ -394,16 +502,10 @@ function handleWsSend(e) {
   const content = document.getElementById('ws-msg-content').value.trim();
   if (!to || !content) return;
 
-  const env = {
+  ws.send(JSON.stringify({
     type: 'message.send',
-    payload: {
-      to: to,
-      content: content,
-      content_type: 'text',
-    },
-  };
-
-  ws.send(JSON.stringify(env));
+    payload: { to, content, content_type: 'text' },
+  }));
   wsLog('sent', `[to: ${to}] ${content}`);
   document.getElementById('ws-msg-content').value = '';
   document.getElementById('ws-msg-content').focus();
@@ -430,25 +532,13 @@ function stopHeartbeat() {
 
 function updateWsUI() {
   const connected = ws && ws.readyState === WebSocket.OPEN;
-  const dot = document.getElementById('ws-status-dot');
-  const text = document.getElementById('ws-status-text');
-  const btnConnect = document.getElementById('btn-ws-connect');
-  const btnDisconnect = document.getElementById('btn-ws-disconnect');
-  const btnSend = document.getElementById('btn-ws-send');
-
-  if (connected) {
-    dot.className = 'status-dot connected';
-    text.textContent = 'Connected';
-    btnConnect.disabled = true;
-    btnDisconnect.disabled = false;
-    btnSend.disabled = false;
-  } else {
-    dot.className = 'status-dot disconnected';
-    text.textContent = 'Disconnected';
-    btnConnect.disabled = !store.isLoggedIn();
-    btnDisconnect.disabled = true;
-    btnSend.disabled = true;
-  }
+  document.getElementById('ws-status-dot').className =
+    'status-dot ' + (connected ? 'connected' : 'disconnected');
+  document.getElementById('ws-status-text').textContent =
+    connected ? 'Connected' : 'Disconnected';
+  document.getElementById('btn-ws-connect').disabled = connected || !sessionStore.isLoggedIn();
+  document.getElementById('btn-ws-disconnect').disabled = !connected;
+  document.getElementById('btn-ws-send').disabled = !connected;
 }
 
 // --- WebSocket Log -----------------------------------------------------------
@@ -462,15 +552,13 @@ function wsLog(category, message) {
   entry.innerHTML = `<span class="log-time">${time}</span>${escapeHtml(message)}`;
   container.appendChild(entry);
 
-  // Auto-scroll if enabled
   if (document.getElementById('ws-auto-scroll').checked) {
     container.scrollTop = container.scrollHeight;
   }
 }
 
 function clearWsLog() {
-  const container = document.getElementById('ws-log');
-  container.innerHTML = '';
+  document.getElementById('ws-log').innerHTML = '';
   wsLog('system', 'Log cleared.');
 }
 
@@ -480,47 +568,47 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// --- Cross-tab Sync ----------------------------------------------------------
+//
+// When another tab changes sessions or switches the active user, this tab
+// picks up the change via the storage event and refreshes its UI.
+window.addEventListener('storage', (e) => {
+  if (e.key === 'im_sessions' || e.key === 'im_active_id') {
+    refreshSessionUI();
+    updateWsUI();
+  }
+});
+
 // --- Initialization ----------------------------------------------------------
 
 function init() {
-  // Set server URL from store
-  document.getElementById('server-url').value = store.serverUrl;
+  document.getElementById('server-url').value = serverUrlStore.get();
 
-  // Tab switching
   initTabs();
 
-  // Server events
   document.getElementById('btn-ping').addEventListener('click', pingServer);
   document.getElementById('server-url').addEventListener('change', function() {
-    store.serverUrl = this.value.trim();
+    serverUrlStore.set(this.value.trim());
     setServerStatus('offline', 'Server URL changed — ping to verify');
   });
 
-  // Auth events
   document.getElementById('form-register').addEventListener('submit', handleRegister);
   document.getElementById('form-login').addEventListener('submit', handleLogin);
-  document.getElementById('btn-logout').addEventListener('click', handleLogout);
 
-  // REST API buttons
   initApiButtons();
 
-  // WebSocket events
   document.getElementById('btn-ws-connect').addEventListener('click', connectWs);
   document.getElementById('btn-ws-disconnect').addEventListener('click', disconnectWs);
   document.getElementById('form-ws-send').addEventListener('submit', handleWsSend);
   document.getElementById('btn-clear-log').addEventListener('click', clearWsLog);
 
-  // Initial UI state
-  updateSessionUI();
+  refreshSessionUI();
   updateWsUI();
-
-  // Ping server on load
   pingServer();
 
   console.log('IM Test Client initialized.');
-  console.log('Server:', store.serverUrl);
-  console.log('Logged in:', store.isLoggedIn());
+  console.log('Server:', serverUrlStore.get());
+  console.log('Sessions:', sessionStore.getAll().length);
 }
 
-// Boot
 document.addEventListener('DOMContentLoaded', init);
