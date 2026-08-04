@@ -62,14 +62,12 @@
       </div>
     </div>
 
-    <!-- Session -->
-    <div class="card" id="session-card" style="display:none;">
-      <h2>Current Session</h2>
-      <div class="kv"><span>User ID:</span><span id="sess-user-id">-</span></div>
-      <div class="kv"><span>Access Token:</span><code id="sess-access-token">-</code></div>
-      <div class="kv"><span>Refresh Token:</span><code id="sess-refresh-token">-</code></div>
-      <div class="kv"><span>Expires In:</span><span id="sess-expires">-</span></div>
-      <button id="btn-logout" class="btn btn-danger">Logout</button>
+    <!-- Sessions -->
+    <div class="card" id="session-card">
+      <h2>Sessions</h2>
+      <div id="session-list">
+        <p class="hint">No active sessions. Register or login above.</p>
+      </div>
     </div>
   </section>
 
