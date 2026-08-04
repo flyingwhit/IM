@@ -13,12 +13,13 @@
 
 // --- Session Store -----------------------------------------------------------
 //
-// Sessions are stored in localStorage as:
-//   im_sessions:  JSON array of {id, label, userId, accessToken, refreshToken, expiresIn}
-//   im_active_id: string — ID of the currently active session
+// Two-tier storage design:
+//   localStorage  → im_sessions: JSON array of all sessions (shared across tabs)
+//   sessionStorage → im_active_id: ID of this tab's active session (per-tab!)
 //
-// This allows multiple users to be logged in simultaneously across tabs.
-// Each tab can independently switch its active session.
+// sessionStorage is isolated per tab/window. This means:
+//   Tab 1: active=alice, Tab 2: active=bob → no interference.
+// localStorage is shared so all tabs see the same session list.
 
 const sessionStore = {
   // Migrate old single-key format to new multi-session format.
@@ -38,7 +39,7 @@ const sessionStore = {
       ['im_access_token','im_refresh_token','im_expires_in','im_user_id'].forEach(
         k => localStorage.removeItem(k));
       localStorage.setItem('im_sessions', JSON.stringify([session]));
-      localStorage.setItem('im_active_id', session.id);
+      sessionStorage.setItem('im_active_id', session.id);
     }
     localStorage.setItem('_im_migrated', '1');
   },
@@ -58,7 +59,7 @@ const sessionStore = {
   getActive() {
     const list = this.getAll();
     if (list.length === 0) return null;
-    const activeId = localStorage.getItem('im_active_id');
+    const activeId = sessionStorage.getItem('im_active_id');
     return list.find(s => s.id === activeId) || list[0];
   },
 
@@ -74,7 +75,7 @@ const sessionStore = {
       existing.accessToken = accessToken;
       existing.refreshToken = refreshToken;
       existing.expiresIn = expiresIn;
-      localStorage.setItem('im_active_id', existing.id);
+      sessionStorage.setItem('im_active_id', existing.id);
     } else {
       const session = {
         id: 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
@@ -85,7 +86,7 @@ const sessionStore = {
         expiresIn,
       };
       list.push(session);
-      localStorage.setItem('im_active_id', session.id);
+      sessionStorage.setItem('im_active_id', session.id);
     }
     this._saveAll(list);
   },
@@ -95,15 +96,15 @@ const sessionStore = {
     let list = this.getAll();
     list = list.filter(s => s.id !== id);
     this._saveAll(list);
-    if (localStorage.getItem('im_active_id') === id) {
+    if (sessionStorage.getItem('im_active_id') === id) {
       const next = list.length > 0 ? list[list.length - 1] : null;
-      localStorage.setItem('im_active_id', next ? next.id : '');
+      sessionStorage.setItem('im_active_id', next ? next.id : '');
     }
   },
 
   /** Switch the active session to a different ID. */
   setActive(id) {
-    localStorage.setItem('im_active_id', id);
+    sessionStorage.setItem('im_active_id', id);
   },
 
   /** True if there is an active session with a non-empty access token. */
@@ -121,7 +122,7 @@ const sessionStore = {
   /** Remove all sessions. */
   clearAll() {
     localStorage.removeItem('im_sessions');
-    localStorage.removeItem('im_active_id');
+    sessionStorage.removeItem('im_active_id');
   },
 };
 
@@ -570,10 +571,10 @@ function escapeHtml(str) {
 
 // --- Cross-tab Sync ----------------------------------------------------------
 //
-// When another tab changes sessions or switches the active user, this tab
-// picks up the change via the storage event and refreshes its UI.
+// When another tab adds/removes a session, refresh the session list.
+// Active session is NOT synced — each tab maintains its own via sessionStorage.
 window.addEventListener('storage', (e) => {
-  if (e.key === 'im_sessions' || e.key === 'im_active_id') {
+  if (e.key === 'im_sessions') {
     refreshSessionUI();
     updateWsUI();
   }
