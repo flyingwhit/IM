@@ -142,13 +142,23 @@ func (s *FriendService) RemoveFriend(ctx context.Context, friendshipID, userID s
 	}
 
 	// Delete both records in a transaction.
+	// Look up the reverse record — may not exist (e.g. one-sided data from
+	// an older schema version). We distinguish "not found" (safe to skip)
+	// from actual DB errors (must abort to avoid orphaned records).
 	reverse, reverseErr := s.friendRepo.FindByUserAndFriend(ctx, f.FriendID, f.UserID)
+	if reverseErr != nil {
+		var appErr *model.AppError
+		if !errors.As(reverseErr, &appErr) || !errors.Is(appErr.Err, model.ErrNotFound) {
+			return fmt.Errorf("find reverse friendship: %w", reverseErr)
+		}
+		// NotFound is OK — the reverse record might not exist.
+	}
 
 	return postgres.RunTx(ctx, s.friendRepo.Pool(), func(tx pgx.Tx) error {
 		if err := s.friendRepo.DeleteTx(ctx, tx, f.ID); err != nil {
 			return err
 		}
-		if reverseErr == nil && reverse != nil {
+		if reverse != nil {
 			if err := s.friendRepo.DeleteTx(ctx, tx, reverse.ID); err != nil {
 				return err
 			}
