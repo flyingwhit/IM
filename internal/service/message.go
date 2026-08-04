@@ -318,7 +318,11 @@ func (s *MessageService) DeliverOfflineMessages(userID string) {
 		log.Printf("msg: pushing %d recall notifications to user %s", len(recalled), userID)
 		for _, msg := range recalled {
 			if msg.RecalledAt != nil {
-				s.sendRecallNotification(msg.SenderID, msg.ReceiverID, msg.ID, *msg.RecalledAt)
+				// Only notify the reconnecting user (receiver). The sender
+					// already received the recall notification when they recalled
+					// the message. Using a targeted send avoids a duplicate
+					// push to the sender.
+					s.sendRecallToUser(userID, msg.ID, *msg.RecalledAt)
 			}
 		}
 	}
@@ -409,6 +413,19 @@ func (s *MessageService) deliverToUser(userID string, msg *model.Message) bool {
 	})
 	s.router.SendToUser(userID, env)
 	return true
+}
+
+// sendRecallToUser sends a message.recalled notification to a single user.
+// Unlike sendRecallNotification (which broadcasts to both parties), this
+// targets only one user. Used when delivering recall notifications during
+// reconnection — the sender already received the notification when they
+// originally recalled the message.
+func (s *MessageService) sendRecallToUser(userID, msgID string, recalledAt time.Time) {
+	env := ws.MustEnvelope(ws.TypeMessageRecalled, ws.MessageRecalledPayload{
+		MessageID:  msgID,
+		RecalledAt: recalledAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
+	s.router.SendToUser(userID, env)
 }
 
 // sendAck sends a delivery acknowledgement back to the sender.
