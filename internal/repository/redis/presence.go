@@ -36,6 +36,11 @@ func (r *PresenceRepo) key(userID string) string {
 	return "presence:" + userID
 }
 
+// Refresh extends the TTL for an active user's presence key.
+func (r *PresenceRepo) Refresh(ctx context.Context, userID string) error {
+	return r.client.Set(ctx, r.key(userID), "1", presenceTTL).Err()
+}
+
 // SetOnline marks a user as online with a TTL.
 func (r *PresenceRepo) SetOnline(ctx context.Context, userID string) error {
 	return r.client.Set(ctx, r.key(userID), "1", presenceTTL).Err()

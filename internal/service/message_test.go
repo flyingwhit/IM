@@ -17,9 +17,11 @@ import (
 
 // fakeMessageStore implements messageStore for testing.
 type fakeMessageStore struct {
-	mu       sync.Mutex
-	messages map[string]*model.Message // id → message
-	insertFn func(msg *model.Message) error
+	mu              sync.Mutex
+	messages        map[string]*model.Message // id → message
+	insertFn        func(msg *model.Message) error
+	undeliveredMsgs []model.Message // returned by FindUndelivered
+	updateStatusFn  func(msgID string, status model.MessageStatus) error
 }
 
 func newFakeMessageStore() *fakeMessageStore {
@@ -55,10 +57,18 @@ func (r *fakeMessageStore) FindConversation(_ context.Context, _, _ string, _ ti
 }
 
 func (r *fakeMessageStore) FindUndelivered(_ context.Context, _ string) ([]model.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.undeliveredMsgs != nil {
+		return r.undeliveredMsgs, nil
+	}
 	return nil, nil
 }
 
-func (r *fakeMessageStore) UpdateStatus(_ context.Context, _ string, _ model.MessageStatus) error {
+func (r *fakeMessageStore) UpdateStatus(_ context.Context, msgID string, status model.MessageStatus) error {
+	if r.updateStatusFn != nil {
+		return r.updateStatusFn(msgID, status)
+	}
 	return nil
 }
 
@@ -195,7 +205,7 @@ func mustMessageServiceWithStore(store *fakeMessageStore, router *fakeRouter, fr
 	}
 }
 
-// --- Send tests (existing) ---
+// --- Send tests ---
 
 func TestMessageService_HandleIncomingMessage_Success(t *testing.T) {
 	friends := newFakeFriendChecker()
@@ -373,16 +383,91 @@ func TestMessageService_HandleIncomingMessage_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestMessageService_DeliverOfflineMessages(t *testing.T) {
+// --- Offline delivery tests ---
+
+func TestMessageService_DeliverOfflineMessages_Empty(t *testing.T) {
 	friends := newFakeFriendChecker()
 	router := newFakeRouter()
 	router.online["bob"] = true
 	svc := mustMessageService(router, friends)
 
-	// No undelivered messages — should not send anything.
 	svc.DeliverOfflineMessages("bob")
 	if envs := router.envelopes("bob"); len(envs) > 0 {
 		t.Error("no undelivered messages, should not send anything")
+	}
+}
+
+func TestMessageService_DeliverOfflineMessages_Success(t *testing.T) {
+	friends := newFakeFriendChecker()
+	router := newFakeRouter()
+	router.online["bob"] = true
+
+	var updatedStatuses []string
+	now := time.Now()
+	store := newFakeMessageStore()
+	store.undeliveredMsgs = []model.Message{
+		{ID: "msg-1", SenderID: "alice", ReceiverID: "bob", Content: "hello", Status: model.MessageStatusSent, CreatedAt: now.Add(-1 * time.Minute)},
+		{ID: "msg-2", SenderID: "charlie", ReceiverID: "bob", Content: "hi bob", Status: model.MessageStatusSent, CreatedAt: now},
+	}
+	store.updateStatusFn = func(msgID string, status model.MessageStatus) error {
+		updatedStatuses = append(updatedStatuses, string(status))
+		return nil
+	}
+	svc := mustMessageServiceWithStore(store, router, friends)
+
+	svc.DeliverOfflineMessages("bob")
+
+	// Bob should receive both messages via message.new.
+	envs := router.envelopes("bob")
+	if len(envs) != 2 {
+		t.Fatalf("bob should receive 2 messages, got %d", len(envs))
+	}
+	for i, e := range envs {
+		if e.Type != ws.TypeMessageNew {
+			t.Errorf("envelope %d: expected message.new, got %s", i, e.Type)
+		}
+	}
+
+	// Both messages should be marked delivered.
+	if len(updatedStatuses) != 2 {
+		t.Errorf("expected 2 status updates, got %d", len(updatedStatuses))
+	}
+	for _, s := range updatedStatuses {
+		if s != string(model.MessageStatusDelivered) {
+			t.Errorf("expected status %s, got %s", model.MessageStatusDelivered, s)
+		}
+	}
+}
+
+func TestMessageService_DeliverOfflineMessages_ChronologicalOrder(t *testing.T) {
+	friends := newFakeFriendChecker()
+	router := newFakeRouter()
+	router.online["bob"] = true
+
+	now := time.Now()
+	store := newFakeMessageStore()
+	store.undeliveredMsgs = []model.Message{
+		{ID: "msg-old", SenderID: "alice", ReceiverID: "bob", Content: "older", Status: model.MessageStatusSent, CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: "msg-new", SenderID: "alice", ReceiverID: "bob", Content: "newer", Status: model.MessageStatusSent, CreatedAt: now},
+	}
+	svc := mustMessageServiceWithStore(store, router, friends)
+
+	svc.DeliverOfflineMessages("bob")
+
+	envs := router.envelopes("bob")
+	if len(envs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(envs))
+	}
+
+	// Verify oldest-first order: msg-old then msg-new.
+	var payload ws.MessageNewPayload
+	json.Unmarshal(envs[0].Payload, &payload)
+	if payload.ID != "msg-old" {
+		t.Errorf("first message: expected msg-old, got %s", payload.ID)
+	}
+	json.Unmarshal(envs[1].Payload, &payload)
+	if payload.ID != "msg-new" {
+		t.Errorf("second message: expected msg-new, got %s", payload.ID)
 	}
 }
 
@@ -422,7 +507,6 @@ func TestMessageService_Recall_Success(t *testing.T) {
 	router.online["bob"] = true
 
 	store := newFakeMessageStore()
-	// Inject a message that alice sent to bob 30 seconds ago.
 	store.injectMessage(&model.Message{
 		ID:         "msg-001",
 		SenderID:   "alice",
@@ -494,7 +578,7 @@ func TestMessageService_Recall_TimeExceeded(t *testing.T) {
 		ReceiverID: "bob",
 		Content:    "old message",
 		Status:     model.MessageStatusDelivered,
-		CreatedAt:  time.Now().Add(-3 * time.Minute), // 3 minutes ago, exceeds 2-minute window
+		CreatedAt:  time.Now().Add(-3 * time.Minute),
 	})
 	svc := mustMessageServiceWithStore(store, router, friends)
 
@@ -545,7 +629,7 @@ func TestMessageService_Recall_AlreadyRecalled(t *testing.T) {
 		Content:    "already recalled",
 		Status:     model.MessageStatusDelivered,
 		CreatedAt:  time.Now().Add(-30 * time.Second),
-		RecalledAt: &recalledAt, // already recalled
+		RecalledAt: &recalledAt,
 	})
 	svc := mustMessageServiceWithStore(store, router, friends)
 
@@ -562,7 +646,6 @@ func TestMessageService_Recall_ReceiverOffline(t *testing.T) {
 	friends := newFakeFriendChecker()
 	friends.addFriend("alice", "bob")
 	router := newFakeRouter()
-	// bob is offline
 	router.online["bob"] = false
 
 	store := newFakeMessageStore()
@@ -571,7 +654,7 @@ func TestMessageService_Recall_ReceiverOffline(t *testing.T) {
 		SenderID:   "alice",
 		ReceiverID: "bob",
 		Content:    "secret",
-		Status:     model.MessageStatusSent, // not yet delivered
+		Status:     model.MessageStatusSent,
 		CreatedAt:  time.Now().Add(-30 * time.Second),
 	})
 	svc := mustMessageServiceWithStore(store, router, friends)
@@ -583,7 +666,7 @@ func TestMessageService_Recall_ReceiverOffline(t *testing.T) {
 	if !router.hasEnvelopeType("alice", ws.TypeMessageRecalled) {
 		t.Error("alice should receive message.recalled")
 	}
-	// Bob is offline — should NOT receive anything.
+	// Bob is offline — should NOT receive recalled notification.
 	if router.hasEnvelopeType("bob", ws.TypeMessageRecalled) {
 		t.Error("bob is offline, should not receive message.recalled")
 	}
@@ -599,7 +682,7 @@ func TestMessageService_Recall_InvalidPayload(t *testing.T) {
 	router := newFakeRouter()
 	svc := mustMessageService(router, friends)
 
-	// Send a recall envelope with no payload.
+	// Send a recall envelope with empty message_id.
 	raw, _ := json.Marshal(ws.Envelope{
 		Type:    ws.TypeMessageRecall,
 		Payload: json.RawMessage(`{"message_id": ""}`),
@@ -618,16 +701,11 @@ func TestMessageService_GetConversation_MasksRecalledContent(t *testing.T) {
 	store := newFakeMessageStore()
 	svc := mustMessageServiceWithStore(store, router, friends)
 
-	// This test exercises the service-layer masking via the fake store.
-	// The fake FindConversation returns nil so we rely on the compile-time
-	// guarantee; the actual masking happens in the real service, verified
-	// by the integration test that the code compiles correctly.
 	msgs, err := svc.GetConversation("alice", "bob", "", 50)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if msgs == nil {
-		// fake returns nil — this test just validates the path compiles.
 		t.Log("fake store returned nil (expected)")
 	}
 }

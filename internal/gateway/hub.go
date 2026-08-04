@@ -119,6 +119,17 @@ func (h *Hub) OnlineCount() int {
 	return len(h.clients)
 }
 
+func (h *Hub) RefreshPresence(userID string) {
+	if h.presence == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.presence.Refresh(ctx, userID); err != nil {
+		log.Printf("hub: refresh presence for user %s: %v", userID, err)
+	}
+}
+
 // Find returns all active connections for a user.
 // Returns nil if the user has no active connections.
 func (h *Hub) Find(userID string) []*Client {

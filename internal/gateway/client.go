@@ -158,6 +158,7 @@ func (c *Client) writePump() {
 				log.Printf("ws ping error: %v (user=%s, conn=%s)", err, c.userID, c.connID)
 				return
 			}
+			c.hub.RefreshPresence(c.userID)
 		}
 	}
 }
