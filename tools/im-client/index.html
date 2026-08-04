@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IM Backend Test Client</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>IM Backend Test Client</h1>
+    <div id="connection-bar">
+      <span id="server-indicator" class="status-dot offline"></span>
+      <span id="server-label">No server configured</span>
+      <span id="session-info"></span>
+    </div>
+  </header>
+
+  <!-- Tab Navigation -->
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="auth">Auth</button>
+    <button class="tab-btn" data-tab="rest">REST APIs</button>
+    <button class="tab-btn" data-tab="ws">WebSocket</button>
+  </nav>
+
+  <!-- ==================== Auth Tab ==================== -->
+  <section id="tab-auth" class="tab-content active">
+    <div class="card">
+      <h2>Server Configuration</h2>
+      <div class="form-row">
+        <label>Server URL:</label>
+        <input type="text" id="server-url" value="http://localhost:8080" placeholder="http://localhost:8080">
+        <button id="btn-ping" class="btn btn-sm">Ping</button>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <!-- Register -->
+      <div class="card">
+        <h2>Register</h2>
+        <form id="form-register">
+          <label>Username</label>
+          <input type="text" name="username" required minlength="3" placeholder="alice">
+          <label>Email</label>
+          <input type="email" name="email" required placeholder="alice@example.com">
+          <label>Password</label>
+          <input type="password" name="password" required minlength="6" placeholder="••••••">
+          <button type="submit" class="btn btn-primary">Register</button>
+        </form>
+      </div>
+
+      <!-- Login -->
+      <div class="card">
+        <h2>Login</h2>
+        <form id="form-login">
+          <label>Username</label>
+          <input type="text" name="username" required placeholder="alice">
+          <label>Password</label>
+          <input type="password" name="password" required placeholder="••••••">
+          <button type="submit" class="btn btn-primary">Login</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Session -->
+    <div class="card" id="session-card" style="display:none;">
+      <h2>Current Session</h2>
+      <div class="kv"><span>User ID:</span><span id="sess-user-id">-</span></div>
+      <div class="kv"><span>Access Token:</span><code id="sess-access-token">-</code></div>
+      <div class="kv"><span>Refresh Token:</span><code id="sess-refresh-token">-</code></div>
+      <div class="kv"><span>Expires In:</span><span id="sess-expires">-</span></div>
+      <button id="btn-logout" class="btn btn-danger">Logout</button>
+    </div>
+  </section>
+
+  <!-- ==================== REST API Tab ==================== -->
+  <section id="tab-rest" class="tab-content">
+    <!-- User -->
+    <div class="card">
+      <h2>GET /api/v1/users/me</h2>
+      <p class="desc">Get current user profile.</p>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/users/me">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>PUT /api/v1/users/me</h2>
+      <p class="desc">Update profile (nickname, avatar_url).</p>
+      <div class="form-row">
+        <input type="text" id="update-nickname" placeholder="nickname (optional)">
+        <input type="text" id="update-avatar" placeholder="avatar_url (optional)">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="PUT" data-path="/api/v1/users/me" data-body="update-profile">Send</button>
+    </div>
+
+    <!-- Presence -->
+    <div class="card">
+      <h2>GET /api/v1/users/:id/online</h2>
+      <p class="desc">Check if a user is online.</p>
+      <div class="form-row">
+        <input type="text" id="online-user-id" placeholder="User ID">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/users/{id}/online" data-path-param="online-user-id">Send</button>
+    </div>
+
+    <!-- Friends -->
+    <div class="card">
+      <h2>GET /api/v1/friends</h2>
+      <p class="desc">List all friends.</p>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/friends">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>POST /api/v1/friends/requests</h2>
+      <p class="desc">Send a friend request.</p>
+      <div class="form-row">
+        <input type="text" id="friend-target-id" placeholder="Target user ID">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="POST" data-path="/api/v1/friends/requests" data-body="friend-request">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>GET /api/v1/friends/requests</h2>
+      <p class="desc">List pending friend requests.</p>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/friends/requests">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>PUT /api/v1/friends/requests/:id/accept</h2>
+      <p class="desc">Accept a friend request.</p>
+      <div class="form-row">
+        <input type="text" id="accept-request-id" placeholder="Request ID">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="PUT" data-path="/api/v1/friends/requests/{id}/accept" data-path-param="accept-request-id">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>PUT /api/v1/friends/requests/:id/reject</h2>
+      <p class="desc">Reject a friend request.</p>
+      <div class="form-row">
+        <input type="text" id="reject-request-id" placeholder="Request ID">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="PUT" data-path="/api/v1/friends/requests/{id}/reject" data-path-param="reject-request-id">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>DELETE /api/v1/friends/:id</h2>
+      <p class="desc">Remove a friend.</p>
+      <div class="form-row">
+        <input type="text" id="remove-friend-id" placeholder="Friendship ID">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="DELETE" data-path="/api/v1/friends/{id}" data-path-param="remove-friend-id">Send</button>
+    </div>
+
+    <!-- Messages -->
+    <div class="card">
+      <h2>GET /api/v1/messages</h2>
+      <p class="desc">Get conversation history with a peer.</p>
+      <div class="form-row">
+        <input type="text" id="msg-peer" placeholder="Peer user ID (required)">
+        <input type="text" id="msg-before" placeholder="before cursor (optional)">
+        <input type="number" id="msg-limit" placeholder="limit" min="1" max="100" value="50">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/messages" data-query="msg-query">Send</button>
+    </div>
+
+    <!-- Response display -->
+    <div class="card response-card">
+      <h2>Response</h2>
+      <div class="response-meta">
+        <span id="resp-status" class="badge">-</span>
+        <span id="resp-time">-</span>
+      </div>
+      <pre id="resp-body">Click "Send" on any endpoint above.</pre>
+    </div>
+  </section>
+
+  <!-- ==================== WebSocket Tab ==================== -->
+  <section id="tab-ws" class="tab-content">
+    <div class="two-col">
+      <!-- Connection -->
+      <div class="card">
+        <h2>Connection</h2>
+        <div class="ws-status-row">
+          <span id="ws-status-dot" class="status-dot disconnected"></span>
+          <span id="ws-status-text">Disconnected</span>
+        </div>
+        <div class="btn-row">
+          <button id="btn-ws-connect" class="btn btn-primary">Connect</button>
+          <button id="btn-ws-disconnect" class="btn btn-danger" disabled>Disconnect</button>
+        </div>
+        <p class="hint">Requires a valid JWT token. Login first, then connect.</p>
+      </div>
+
+      <!-- Send Message -->
+      <div class="card">
+        <h2>Send Message</h2>
+        <form id="form-ws-send">
+          <label>To (User ID):</label>
+          <input type="text" id="ws-msg-to" required placeholder="Target user ID">
+          <label>Content:</label>
+          <input type="text" id="ws-msg-content" required placeholder="Hello!">
+          <button type="submit" class="btn btn-primary" id="btn-ws-send" disabled>Send</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Message Log -->
+    <div class="card">
+      <h2>Message Log</h2>
+      <div class="btn-row">
+        <button id="btn-clear-log" class="btn btn-sm">Clear</button>
+        <label class="checkbox-label"><input type="checkbox" id="ws-auto-scroll" checked> Auto-scroll</label>
+      </div>
+      <div id="ws-log" class="log-container">
+        <div class="log-entry system">Waiting for connection...</div>
+      </div>
+    </div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

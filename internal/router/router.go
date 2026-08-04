@@ -22,6 +22,10 @@ func Setup(
 ) *gin.Engine {
 	r := gin.Default()
 
+	// CORS — allow cross-origin requests from the test client.
+	// The test client runs on file:// or varying localhost ports.
+	r.Use(middleware.CORS())
+
 	// Health check — no auth, no version prefix (infrastructure endpoint).
 	r.GET("/health", healthHandler.Check)
 
