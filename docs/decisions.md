@@ -1,203 +1,180 @@
-# Engineering Decisions
+# 工程决策
 
-## 1. Layered Architecture over Hexagonal/Clean Architecture
+## 1. 分层架构而非 Hexagonal/Clean Architecture
 
-**Decision**: Handler → Service → Repository layers with concrete dependencies.
+**决策**：Handler → Service → Repository 分层，具体类型依赖。
 
-**Alternative**: Port/Adapter pattern with interfaces at every boundary.
+**原因**：Phase 1-3 的业务逻辑简单（CRUD + 认证 + 消息），Hexagonal 架构增加的接口层在当前阶段只有仪式感。当 Phase 4 需要替换 repository 实现时，Service 层的依赖已经可以抽象为接口。
 
-**Why**: Phase 1 has three entities (User, Friend, Token) with straightforward CRUD + auth logic. Hexagonal architecture at this stage would mean 6+ interfaces, doubling the file count with no benefit. The layering is intentional — when we need to swap a repository implementation (e.g., PostgreSQL → gRPC in Phase 4), the Service layer's dependency is already abstractable behind an interface.
+**取舍**：单元测试需 fake 实现而非 mock 框架。对当前规模可接受。
 
-**When to revisit**: Phase 2 WebSocket testing demands mockable services → introduce interfaces then.
+## 2. UUID 而非 SERIAL 主键
 
-## 2. UUID over SERIAL Primary Keys
+**决策**：所有表使用 `UUID DEFAULT gen_random_uuid()`。
 
-**Decision**: All tables use `UUID DEFAULT gen_random_uuid()`.
+**原因**：如果先使用 SERIAL 以后迁移到 UUID，每个外键都会断裂。UUID 索引比 BIGINT 大约 2 倍（百万用户 ~32 MB vs ~16 MB），在现代硬件上可忽略。
 
-**Why now, not later**: Migrating from SERIAL to UUID after deployment is painful (every foreign key breaks). Starting with UUID costs a few percent in index performance but saves a migration disaster later.
+## 3. 好友双向记录模型
 
-**Real cost**: UUID indexes are ~2x larger than BIGINT. For a million users, that's ~32 MB vs ~16 MB for the index — negligible on modern hardware.
+**决策**：好友关系存储两行 `(A, B)` 和 `(B, A)`。
 
-## 3. Dual-Record Friend Model
+**替代方案**：单行 + `user_id < friend_id` 规范排序。
 
-**Decision**: Store `(A, B)` and `(B, A)` as separate rows when friends.
+**原因**："我的好友"查询是 `WHERE user_id = ? AND status = 'accepted'`——简单的索引查找。单行方案需要 `WHERE (user_id = ? OR friend_id = ?)`，OR 两侧不能同时有效使用索引。
 
-**Alternative**: Single row with `user_id < friend_id` canonical ordering.
+**取舍**：双倍存储。一条好友关系约 64 bytes，1000 好友 = 64 KB。可接受。
 
-**Why dual-record**: Query `WHERE user_id = ? AND status = 'accepted'` is a simple indexed lookup. The single-row approach requires `WHERE (user_id = ? OR friend_id = ?)` which forces a sequential scan or bitmap index scan — at least 2x slower for friend list queries, and friend list is the most frequent read in the system.
+## 4. JWT Access Token + 不透明 Refresh Token
 
-**Trade-off**: Double storage for friendships. A friendship uses ~64 bytes; 1000 friends = 64 KB. Acceptable.
+**决策**：Access token 是 JWT（无状态），refresh token 是随机 hex 字符串（有状态，存 Redis）。
 
-## 4. JWT Access Token + Opaque Refresh Token
+**原因**：
+- Access token 每次请求都校验 → 必须快。JWT 是本地 HMAC 校验，无网络调用。
+- Refresh token 每 15 分钟才用一次 → Redis 查询可接受。
+- 不透明 refresh token 不含声明——攻击者偷到也得不到信息。Redis 只存 SHA-256 哈希，Redis 被攻破时 raw token 不暴露。
 
-**Decision**: Access tokens are JWTs (stateless). Refresh tokens are random hex strings (stateful, stored in Redis).
+**Token 旋转**：每次 refresh 使旧 token 失效并签发新对。如果攻击者盗用 refresh token，合法用户下次 refresh 会失败（旧 token 已被消费），自然发现泄露。
 
-**Alternative**: Both JWTs, or both opaque, or pure session-based auth.
+## 5. bcrypt 而非 Argon2
 
-**Why this split**:
-- Access token is validated on EVERY request → must be fast. JWT validation is a local HMAC check, no network call.
-- Refresh token is used infrequently (every 15 min) → a Redis lookup is acceptable.
-- Making the refresh token opaque means it carries no claims — an attacker who steals one learns nothing. Storing only its SHA-256 hash in Redis limits damage if Redis is compromised.
+**决策**：使用 bcrypt DefaultCost (10)。
 
-**Token rotation**: Each refresh invalidates the old token and issues a new pair. If an attacker steals a refresh token and uses it, the legitimate user's next refresh will fail (old token already consumed), alerting them to the theft.
+**原因**：`golang.org/x/crypto/bcrypt` 在标准库扩展生态中，Argon2 需要第三方库。bcrypt 的 ~100ms 哈希时间对学习项目足够——攻击者每 CPU 核每秒只能尝试 ~10 个密码。
 
-## 5. bcrypt over Argon2
+## 6. Redis GETDEL 做 Token 刷新
 
-**Decision**: Use bcrypt with DefaultCost (10).
+**决策**：使用 Redis `GETDEL` 命令（原子性 获取+删除），而非分别 `GET` + `DEL`。
 
-**Why not Argon2**: `golang.org/x/crypto/bcrypt` is in the standard library extended ecosystem. Argon2 requires a third-party library. For a learning project, bcrypt's 100ms hash time per password is more than adequate — an attacker can test ~10 passwords/second/CPU core. With an 8-char random password, that's decades to crack.
+**问题**：两个并发刷新请求可能同时通过 `GET` 检查，然后各自执行 `DEL`，两份新 token 对都从同一个旧 token 签发——这是重放攻击。
 
-**When to revisit**: If this becomes a real production system with regulatory requirements, switch to Argon2id.
+`GETDEL` 将 check-then-act 竞态变为单原子操作——只有第一个调用者获取到值。
 
-## 6. go-redis GETDEL for Token Refresh
+**取舍**：需要 Redis 6.2.0+。项目使用 Redis 7，无问题。
 
-**Decision**: Use Redis `GETDEL` command (atomic get-and-delete) instead of separate `GET` + `DEL` calls.
+## 7. 数据库事务保护好友操作
 
-**Problem it solves**: Without atomicity, two concurrent refresh requests could both pass the `GET` check before either `DEL` executes, both issuing new tokens from the same old refresh token.
+**决策**：`AcceptRequest` 和 `RemoveFriend` 在 PostgreSQL 事务中执行。
 
-`GETDEL` transforms this from a check-then-act race condition into a single atomic operation — the second caller sees `nil` and knows the token was already consumed.
+**无事务的风险**：Accept 做两步：(1) UPDATE 已存在行的状态，(2) INSERT 反向行。如果第 2 步失败，数据库不一致——A 在 B 的好友列表中，但反之不然。
 
-**Trade-off**: `GETDEL` requires Redis 6.2.0+. Our docker-compose uses Redis 7, so this is fine.
+实现：`postgres.RunTx` 包装 pgx 事务生命周期。Repository 提供 `*Tx` 后缀的事务版本方法。
 
-## 7. Database Transactions for Friend Operations
+**取舍**：`*Tx` 后缀约定造成代码重复（每个方法有 pool 版和 tx 版），但保持直观可见。
 
-**Decision**: `AcceptRequest` and `RemoveFriend` execute inside PostgreSQL transactions (`BEGIN`/`COMMIT`).
+## 8. 组合根模式（手动 DI）
 
-**Without transactions**: Accepting a friend request means (1) UPDATE existing row status, (2) INSERT reverse row. If step 2 fails, the database is inconsistent — A is in B's friend list but not vice versa.
+**决策**：`cmd/server/main.go` 手动构造所有依赖并组装。无 DI 框架。
 
-**Implementation**: `postgres.RunTx` helper wraps the pgx transaction lifecycle. Service layer orchestrates the transaction boundary; repository provides tx-aware methods (`*Tx` suffix).
+**原因**：10-15 个组件的依赖图在一个文件中完全可见，不需要框架的语义学习成本。
 
-**Trade-off**: The `*Tx` suffix convention creates code duplication (each method has a pool version and a tx version). In Phase 2, introduce a `DB` interface that both `*pgxpool.Pool` and `pgx.Tx` satisfy, eliminating the duplication.
+## 9. Hub + Client Goroutine 模型
 
-## 8. Composition Root Pattern (Manual DI)
+**决策**：使用 gorilla/websocket chat 示例模式——Hub goroutine + channel-based 注册 + per-connection readPump/writePump。
 
-**Decision**: `cmd/server/main.go` manually constructs all dependencies and wires them together. No DI framework.
+**原因**：
+- Go WebSocket 最广泛部署的模式，经过数千生产系统验证
+- Hub 单 goroutine 事件循环消除变更时锁竞争
+- 读写分离：readPump 处理慢消息时 writePump 仍能发送 ping
 
-**Why no wire/dig**: For 10-15 components, manual DI is simpler than learning a framework's semantics. The dependency graph is visible in one file. If the constructor list grows beyond ~20 lines in Phase 4, `google/wire` (compile-time DI) is the natural upgrade path.
+**取舍**：每个连接 2 个 goroutine（~8 KB 栈）。10K 连接 ≈ 80 MB goroutine 开销。接近 100K 连接时需要 shard Hub。
 
-## 9. config.Load() Returns Error, Not Panic
+## 10. Channel-as-Signal（关闭通知）
 
-**Decision (revised)**: `requireEnv` returns `(string, error)` instead of panicking.
+**决策**：连接关闭通过关闭 `send` channel 发信号，而非 mutex + bool flag。
 
-**Why changed**: The original panic-based approach was justified as "fail fast at startup," but it had a real problem: `Load()` signed a contract (`*Config, error`) that it didn't honor. The caller's `if err != nil` was dead code. When startup fails, the error now propagates through `main()` which calls `log.Fatalf` — same fail-fast behavior, honest API.
+**原因**：关闭一个 channel 会广播给所有接收者。writePump 阻塞在 `<-c.send`，channel 关闭时立即以 `ok == false` 唤醒。无需轮询、条件变量或定时重试。
 
-## 10. Health Check Outside API Versioning
+Go 惯用法："close a channel to signal completion"。
 
-**Decision**: `GET /health` (not `/api/v1/health`).
+## 11. 先持久化后投递
 
-**Why**: Infrastructure endpoints and business APIs have different lifecycles. Load balancers, Kubernetes probes, and monitoring tools hit `/health` — changing its path with API versions would break infrastructure tooling. Business APIs evolve with `/api/v1` → `/api/v2`; health checks should be stable forever.
+**决策**：消息先写入 PostgreSQL，再路由到接收方 WebSocket。
 
-## 11. Hub + Client Goroutine Model over Actor Framework
+**为什么先持久化**：
+- 零消息丢失：服务器在接收和投递之间崩溃，消息已在 DB
+- 离线消息免费：接收方离线时消息已持久化，上线时直接加载
+- 实现简单：不需要确认协议、重试队列或对账机制
 
-**Decision**: Use the gorilla/websocket chat example pattern — a Hub goroutine with channel-based registration and per-connection readPump/writePump goroutines.
+**取舍**：每条在线消息约 1-5ms DB 写入延迟。高性能 IM（WhatsApp、微信）先投递后异步持久化，但需要确认链（发送方→服务端→接收方→ACK）。此复杂度推迟到 Phase 4。
 
-**Alternative**: Actor framework (e.g. ergo), or a single goroutine polling all connections.
+## 12. JSON 而非 Protobuf
 
-**Why this pattern**:
-- It's the most widely deployed Go WebSocket pattern — battle-tested in thousands of production systems
-- Each connection's read and write are independent goroutines that communicate through a buffered channel — this is Go's native concurrency primitive, not a framework
-- The Hub's single-goroutine event loop eliminates lock contention during mutation: register and unregister are serialized through channels
-- Readers don't block writers and vice versa — if readPump is processing a slow message, writePump can still send pings
+**决策**：WebSocket 消息使用 JSON 编码。
 
-**Trade-off**: Two goroutines per connection (~8 KB stack each). At 10K connections, that's ~80 MB of goroutine overhead. Acceptable for Phase 2-4; shard the Hub when approaching 100K connections.
+**原因**：JSON 人类可读——开发期间调试价值巨大。Protobuf 需要 schema 编译、代码生成，线格式需专门工具检查。
 
-## 12. Channel-Based Lifecycle over Mutex-Based State Machine
+**何时切换**：Phase 4 可扩展性。Protobuf 在线路上小 3-5 倍，编解码快 5-10 倍。`ws.Envelope` 类型抽象了编码——切换到 protobuf 只需改 marshal/unmarshal 调用，不改变 API。
 
-**Decision**: Connection shutdown is signaled by closing the `send` channel, not by setting a `closed` flag with a mutex.
+## 13. 设备限制在 HTTP 层而非 WebSocket 层
 
-**Why**: Closing a channel broadcasts to all receivers. writePump blocks on `<-c.send` — when the channel closes, it unblocks immediately with `ok == false`. No polling, no condition variables, no timed retries.
+**决策**：在 `gateway.Handler.Handle()` 升级前检查设备数，而非 Hub.Run() 升级后。
 
-This is a Go idiom: "close a channel to signal completion." The readPump's defer does `close(c.send)` → writePump wakes → writes close frame → exits → defer drains remaining messages → goroutine exits cleanly.
+**原因**：
+- 提前失败：客户端收到干净的 JSON 错误（429），而非 WebSocket close frame——更易处理
+- 避免浪费：不在即将被拒绝的连接上做 HTTP 升级和 goroutine 创建
+- 职责分离：Hub.Run() 只负责注册/注销，准入控制是 handler 的职责
 
-**Without this pattern**: A `sync.Mutex` + `bool` flag requires writePump to periodically check the flag between writes. A `sync.Cond` is more complex and error-prone. Channels are the simplest correct solution.
+**取舍**：`Find` 检查和 `register` channel 发送之间存在 TOCTOU 竞态——另一个连接可能在此期间注册。对 3 设备限制来说，此竞态无害（可能变成 4 而非 3）。更严格的限制应用 Redis 原子计数器。
 
-## 13. Store-and-Forward Message Delivery (Persist-First)
+## 14. 服务端发起心跳
 
-**Decision**: Messages are written to PostgreSQL before being routed to the receiver's WebSocket.
+**决策**：服务端每 54 秒发 WebSocket ping，浏览器自动回复 pong。
 
-**Alternative**: Push to receiver first, persist asynchronously (WhatsApp/微信 model).
+**为什么服务端发起**：
+- 浏览器 WebSocket API 不向 JavaScript 暴露 ping/pong 控制帧
+- 服务端是需要感知死连接的一方（清理 Hub 状态）
+- gorilla/websocket 的 `SetReadDeadline` + `PongHandler` 模式实现简单
 
-**Why persist-first for Phase 2**:
-- Zero message loss: if the server crashes between receive and delivery, the message is already in the database
-- Offline messages are free: if the receiver is offline, the message is already persisted — just load it when they reconnect
-- Simpler implementation: no retry queue, no acknowledgement protocol, no reconciliation
+**常量**：`pongWait = 60s`（deadline），`pingPeriod = 54s`（= pongWait × 0.9，留 10% 网络抖动余量）。
 
-**Trade-off**: Every online message pays a ~1-5ms database write latency. High-performance IM systems avoid this by delivering first and persisting asynchronously — but that requires an acknowledgement protocol (sender → server → receiver → ACK chain) to detect lost messages. This complexity is deferred to Phase 4.
+## 15. 服务端生成消息 ID
 
-## 14. JSON over Protobuf for Message Protocol
+**决策**：消息 ID 由服务端生成（`UUID DEFAULT gen_random_uuid()`），非客户端生成。
 
-**Decision**: WebSocket messages use JSON encoding (`ws.Envelope` with `json.RawMessage` payload).
+**原因**：服务端是消息排序和存在的唯一真相源。客户端生成 ID 需要：冲突解决（"两个客户端用了同一个 ID 怎么办？"）、去重（"这是重试还是重复？"）、信任（"客户端时间戳可信吗？"）。
 
-**Why not protobuf/msgpack**: JSON is human-readable — invaluable for debugging during development. Protobuf requires schema compilation, code generation, and opaque wire formats that need specialized tools to inspect.
+**取舍**：发送方要等 ACK 才知道消息 ID（~5-10ms）。UI 可以先本地展示"乐观"版本，收到 ACK 后替换为确认版本。
 
-**When to switch**: Phase 4 scalability. Protobuf is ~3-5x smaller on the wire and ~5-10x faster to encode/decode. The `ws.Envelope` type abstracts the encoding — switching to protobuf means changing the marshal/unmarshal calls, not the API.
+## 16. 回调模式打破包循环依赖
 
-## 15. Device Limit at HTTP Layer, Not WebSocket Layer
+**决策**：`gateway.Hub` 用函数指针回调（`OnMessage`、`OnConnect`），而非直接导入 `service.MessageService`。
 
-**Decision**: Check `maxDevice` per user in `gateway.Handler.Handle()` before the WebSocket upgrade, not in Hub.Run() after the upgrade.
+**为什么**：`gateway` 已导入 `service`（`AuthService`）。如果 `service` 也导入 `gateway`（`Hub`），会形成循环依赖。Go 的解法：在消费者包中定义接口（`MessageRouter`），在生产者包中用函数指针回调。
 
-**Why before upgrade**:
-- Failing early means the client gets a clean JSON error (`429 Too Many Requests`) rather than a WebSocket close frame — easier to handle in client code
-- Avoids wasting the HTTP upgrade handshake and goroutine creation for connections that will be rejected immediately
-- Keeps Hub.Run()'s responsibility narrow: register/unregister. Admission control is a handler concern, not a registry concern
+**组合根模式的实际应用**：`main.go` 是唯一知道两个包的文件，也是组装回调的天然位置。
 
-**Trade-off**: There's a TOCTOU race between the `Find` check and the `register` channel send — another connection could register in between. For a 3-device limit, this race is benign (user might get 4 connections instead of 3). For stricter limits, use an atomic counter in Redis.
+## 17. MessageService 的窄接口
 
-## 16. Server-Side Heartbeat over Client-Side Ping
+**决策**：`MessageService` 将 repo 存储为未导出的窄接口（`messageStore`、`friendChecker`），而非具体 `*postgres.XxxRepo` 类型。
 
-**Decision**: Server sends WebSocket ping frames every 54 seconds; browsers automatically reply with pong.
+**原因**：无需真实数据库即可测试。接口是未导出的——外部包不应依赖它们，它们是 service 包的实现细节。
 
-**Why server-initiated**:
-- Browser WebSocket API does not expose ping/pong control frames to JavaScript — only the browser's internal WebSocket implementation can respond to pings
-- The server is the party that needs to know if the connection is dead (to clean up Hub state and free resources)
-- gorilla/websocket's `SetReadDeadline` + `PongHandler` pattern makes this trivial: pong refreshes the deadline, missed pong triggers ReadMessage error → readPump exits → cleanup
+**取舍**：两层接口（service 中的未导出接口 + postgres 中的导出具体类型）。导出的 `NewMessageService` 构造函数仍接受具体类型，调用者（main.go）不需要知道未导出接口。
 
-**Constants**: `pongWait = 60s` (deadline), `pingPeriod = 54s` (pongWait × 0.9). The 10% margin accommodates network jitter.
+## 18. 每条消息做好友关系检查
 
-## 17. Server-Generated Message IDs
+**决策**：发送方必须是接收方的已接受好友才能发消息。自我消息豁免。
 
-**Decision**: Message IDs are generated by the server (`UUID DEFAULT gen_random_uuid()`), not the client.
+**原因**：使好友系统有意义——好友关系是基本社交契约。不做检查意味着任何用户可以向任何其他人发送垃圾消息。
 
-**Why server-side**: The server is the single source of truth for message ordering and existence. Client-generated IDs would require conflict resolution ("what if two clients send the same ID?"), deduplication ("is this a retry or a duplicate?"), and trust ("does the client-generated timestamp reflect reality?").
+**性能考虑**：每条消息需要一次 `FindByUserAndFriend` 查询（friends 表上的索引查找）。Phase 4 可缓存到 Redis 以减少 DB 负载。
 
-**Trade-off**: The sender doesn't know the message ID until the ACK arrives (~5-10ms). For an IM client, this is imperceptible — the UI can show an "optimistic" version locally and replace it with the confirmed message on ACK.
+## 19. 1v1 消息不需要 conversations 表
 
-## 18. Persist-First Message Delivery
+**决策**：会话从 messages 表通过 SQL 派生，不另建表。
 
-**Decision**: Messages are written to PostgreSQL BEFORE being routed to the receiver's WebSocket.
+**原因**：conversations 表增加写路径复杂度（每条 `INSERT INTO messages` 还要 `UPSERT INTO conversations`），而读路径的好处不在此阶段。
 
-**Why persist-first**: Zero message loss. If the server crashes between receive and delivery, the message is already in the database. Offline messages are free — no separate code path needed. Simpler than the alternative (deliver-first + async persist + reconciliation).
+**何时重新考虑**：Phase 3 群聊。群聊有元数据（群名、头像、成员数）不应放在 messages 表上。那时 conversations 表变得必要。
 
-**Trade-off**: Every online message pays ~1-5ms database write latency. High-performance IM systems (WhatsApp, 微信) deliver first and persist asynchronously, but this requires an acknowledgement chain (sender→server→receiver→ACK) to detect lost messages. Deferred to Phase 4.
+## 20. 消息撤回设计
 
-## 19. Callback Pattern for Bidirectional Package Dependencies
+**决策**：
+- 仅发送者可撤回
+- 2 分钟时间窗口（与微信/Slack 一致）
+- 幂等：重复撤回返回成功而非错误
+- DB 保留原始内容但 API 层清空（审计需要）
+- 广播 `message.recalled` 到双方（所有发送方设备 + 接收方若在线）
+- 离线消息投递排除已撤回消息（`AND recalled_at IS NULL`）
 
-**Decision**: `gateway.Hub` uses function pointer callbacks (`OnMessage`, `OnConnect`) instead of importing `service.MessageService` directly.
-
-**Why callbacks over interfaces**: The `gateway` package already imports `service` (for `AuthService`). If `service` also imports `gateway` (for `Hub`), we have a circular dependency. Go's solution: define interfaces in the consumer package (service defines `MessageRouter` for routing) and use function callbacks for the reverse direction (Hub stores callbacks set by main.go).
-
-**This is the Composition Root pattern in action**: `main.go` is the only file that knows about both packages, so it's the natural place to wire callbacks together.
-
-## 20. Repository Interfaces in Service Package
-
-**Decision**: `MessageService` stores repos as narrow unexported interfaces (`messageStore`, `friendChecker`) rather than concrete `*postgres.XxxRepo` types.
-
-**Why**: Testability without a database. The service can be tested with fakes that implement these interfaces. The interfaces are unexported because no external package should depend on them — they're an implementation detail of the service package.
-
-**Trade-off**: Two layers of interfaces (unexported in service, exported concrete type in postgres). The exported `NewMessageService` constructor still accepts concrete types, so callers (main.go) don't know about the unexported interfaces. This is a pragmatic middle ground: loose coupling where needed, concrete types where sufficient.
-
-## 21. Friendship Check on Every Message
-
-**Decision**: The sender must be an accepted friend of the receiver to send a message. Self-messaging is exempt.
-
-**Why**: This makes the friend system meaningful — friendship is the basic social contract. Without it, any user could spam any other user. Self-messaging is useful for "Saved Messages" / "Notes to Self" patterns.
-
-**Performance consideration**: Each message requires a `FindByUserAndFriend` query (indexed lookup on `friends` table). In Phase 4, this can be cached in Redis to reduce DB load.
-
-## 22. No Conversations Table for 1-on-1 Messages
-
-**Decision**: Conversations are derived from the messages table via SQL, not stored in a separate table.
-
-**Why not now**: A conversations table adds write-path complexity (every `INSERT INTO messages` must also `UPSERT INTO conversations`). The read-path benefit (a single query for the conversation list) doesn't justify this overhead for 1-on-1 messaging.
-
-**When to revisit**: Phase 3 group chat. Group conversations have metadata (group name, avatar, member count) that doesn't belong on the messages table. At that point, a conversations table becomes necessary.
+**取舍**：接收方离线时撤回不会在重连时推送 `message.recalled` 通知——但消息本身不会被投递（已从 offline delivery 排除）。对话历史重新加载时会正确显示。

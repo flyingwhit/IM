@@ -1,150 +1,128 @@
-# Architecture
+# 系统架构
 
-## Overview
+## 概述
 
-IM backend follows a **layered architecture** with four tiers:
-
-```
-HTTP Handler  →  Service  →  Repository  →  Database/Cache
-   (Gin)         (logic)      (data)       (PostgreSQL/Redis)
-```
-
-## Why Layered Architecture
-
-- **Learnability**: Each layer has a single responsibility, making it easy to trace a request end-to-end
-- **Evolvability**: When Phase 4 introduces service decomposition, layer boundaries already exist — splitting repos or services across processes is mechanical
-- **Avoids over-engineering**: Phase 1 logic is simple enough that Hexagonal/Clean Architecture would add ceremony without benefit
-
-Trade-off: Concrete dependencies between layers (no interfaces yet) make unit testing harder. Accepted for Phase 1 — interfaces add indirection cost, and the test pyramid today leans toward integration tests. Phase 2 WebSocket tests work around this by testing Hub and Client directly without real connections.
-
-## Module Responsibilities
-
-| Module | Responsibility | Must NOT |
-|--------|---------------|----------|
-| `handler` | Bind HTTP params, call service, format response | Business logic, direct DB access |
-| `service` | Business rules, orchestration, token management | HTTP concerns, SQL |
-| `repository` | Data access, SQL/Redis commands | Business rules, HTTP concerns |
-| `middleware` | Cross-cutting: auth, CORS, logging | Business logic |
-| `model` | Shared types, domain errors | Any I/O or logic |
-| `config` | Environment variable loading | Business defaults |
-| `router` | Route registration, middleware binding | Handler logic |
-| `gateway` | WebSocket upgrade, connection lifecycle, message routing | Business logic, persistence |
-| `ws` | WebSocket message protocol types and encoding | I/O or business logic |
-
-## Request Flow
+IM 后端采用 **分层架构**，四层职责：
 
 ```
-Client → Gin Router → Middleware (JWT) → Handler → Service → Repository → DB/Redis
-                                                      ↑
-                                              Domain errors (AppError)
-                                              propagate back through layers
-                                              mapped to HTTP status in handler
+Handler (Gin)  →  Service (业务逻辑)  →  Repository (数据访问)  →  DB/Cache
+  HTTP 参数绑定      业务规则编排            SQL/Redis 命令        PostgreSQL/Redis
 ```
 
-Key design decisions in this flow:
-- **Context propagation**: `c.Request.Context()` is passed through all layers. If the client disconnects, the context cancels, and in-flight PostgreSQL queries are aborted automatically.
-- **Error convention**: Repository returns `AppError{Err: sentinel, Message: human}`. Service either propagates it or wraps it. Handler maps sentinel → HTTP status via `errorStatus()`.
+### 为什么用分层架构
 
-## WebSocket Architecture (Phase 2.1)
+- **可学习性**：每层单一职责，追踪请求链路直观
+- **可演进性**：Phase 4 服务拆分时，层边界已存在，切分是机械性的
+- **避免过度设计**：Phase 1-3 的业务逻辑简单，Clean Architecture 引入的接口层只是仪式感
 
-Unlike HTTP's request-response model, WebSocket connections are long-lived. This required a different concurrency model while reusing the existing auth layer.
+取舍：层间用具体类型依赖（无接口层），单元测试需 fake 实现。对当前规模是可接受的。
 
-### Dual-Path Architecture
+## 模块职责
 
-```
-                        ┌──────────────────────┐
-                        │     Gin Router        │
-                        │  /api/v1/*  │  /ws    │
-                        │  (HTTP)     │  (WS)   │
-                        └──────┬──────┴────┬─────┘
-                               │           │
-                         Handler       gateway.Handler
-                          (req/resp)     (upgrade)
-                               │           │
-                         Service      ┌───┴────┐
-                               │      │  Hub   │
-                         Repository   │ Client │
-                               │      └────────┘
-                          DB/Redis        │
-                                     AuthService
-                                  (JWT validation
-                                   reused from HTTP)
-```
+| 模块 | 职责 | 禁止 |
+|------|------|------|
+| `handler` | 绑定 HTTP 参数，调用 service，格式化响应 | 业务逻辑，直接 DB 访问 |
+| `service` | 业务规则，编排，token 管理 | HTTP 相关，SQL |
+| `repository` | 数据访问，SQL/Redis 命令 | 业务规则，HTTP 相关 |
+| `middleware` | 横切关注点：认证、CORS | 业务逻辑 |
+| `model` | 共享类型，领域错误 | 任何 I/O 或逻辑 |
+| `config` | 环境变量加载 | 业务默认值 |
+| `router` | 路由注册，中间件绑定 | handler 逻辑 |
+| `gateway` | WebSocket 升级、连接生命周期、消息路由 | 业务逻辑、持久化 |
+| `ws` | WebSocket 消息协议类型和编解码 | I/O 或业务逻辑 |
 
-**Why not put WebSocket in handler/?** HTTP handlers have a request-response lifecycle measured in milliseconds. WebSocket connections last minutes or hours. Mixing them in the same package would blur two fundamentally different execution models: short-lived goroutines per request vs. long-lived goroutines per connection.
-
-### Hub + Client Goroutine Model
-
-The gateway package implements the canonical Go WebSocket pattern (from gorilla/websocket's chat example):
-
-**Hub** — a single goroutine that owns the connection registry. All register/unregister mutations arrive through channels and are processed sequentially. No locks needed during mutation.
-
-**Client** — each WebSocket connection gets two goroutines:
-- **readPump**: blocking read on the WebSocket → dispatch to handler. On error (disconnect), signals unregister and closes the send channel.
-- **writePump**: reads from a buffered channel → writes to the WebSocket. Also sends periodic pings. The channel is the ONLY writer — gorilla/websocket forbids concurrent writes.
-
-### Connection Lifecycle
+## 请求流
 
 ```
-  Connect                  Active                     Disconnect
+Client → Gin Router → 中间件 (JWT) → Handler → Service → Repository → DB/Redis
+                                                        ↑
+                                                AppError 在层间传播
+                                                handler 将 sentinel 映射到 HTTP 状态码
+```
+
+关键设计：
+- **Context 传播**：`c.Request.Context()` 贯穿所有层。如果客户端断开连接，context 取消，PostgreSQL 查询会自动中止。
+- **错误约定**：Repository 返回 `AppError{Err: sentinel, Message: "人可读的消息"}`。Service 传播或包装。Handler 通过 `errorStatus()` 将 sentinel 映射为 HTTP 状态码。
+
+## WebSocket 架构
+
+### 双路径设计
+
+```
+                       ┌──────────────────────┐
+                       │     Gin Router        │
+                       │  /api/v1/*  │  /ws    │
+                       │  (HTTP)     │  (WS)   │
+                       └──────┬──────┴────┬─────┘
+                              │           │
+                        Handler       gateway.Handler
+                         (req/resp)     (upgrade)
+                              │           │
+                        Service      ┌───┴────┐
+                              │      │  Hub   │
+                        Repository   │ Client │
+                              │      └────────┘
+                         DB/Redis        │
+                                    AuthService
+                                 (JWT 校验，与 HTTP 复用)
+```
+
+**为什么 WebSocket 不放 handler/?** HTTP handler 的生命周期以毫秒计，WebSocket 连接以分钟/小时计。两者放在同一包会模糊两种不同的执行模型：短生命周期的 goroutine-per-request vs 长生命周期的 goroutine-per-connection。
+
+### Hub + Client Goroutine 模型
+
+**Hub** — 单 goroutine 拥有连接注册表。所有 register/unregister 变更通过 channel 到达，顺序处理。变更期间无需锁。
+
+**Client** — 每个 WebSocket 连接有两个 goroutine：
+- **readPump**：阻塞读取 WebSocket → 分发到 handler。出错时（断开连接），发信号 unregister 并关闭 send channel。
+- **writePump**：从有缓冲 channel 读取 → 写入 WebSocket。同时发送周期性 ping。channel 是唯一写入者（gorilla/websocket 禁止并发写）。
+
+### 连接生命周期
+
+```
+  连接                      活跃                      断开
   ─────────               ─────────                 ────────────
   GET /ws?token=           readPump:                 readPump:
-  ├─ JWT validated          ReadMessage() loop        ReadMessage error
-  ├─ Device limit check     │                         │
-  ├─ HTTP 101 Upgrade       ├─ receive message.send   defer:
-  ├─ Client created         │  → MessageService       ├─ close(send)
+  ├─ JWT 校验               ReadMessage() loop        ReadMessage 错误
+  ├─ 设备数限制 (≤3)        │                         │
+  ├─ HTTP 101 Upgrade       ├─ message.send           defer:
+  ├─ Client 创建            │  → MessageService       ├─ close(send)
   ├─ register → Hub         │                         ├─ conn.Close()
   ├─ go writePump()         writePump:                └─ unregister → Hub
   └─ go readPump()          ├─ ← send channel
                              ├─ ticker → ping         writePump:
-                             └─ WriteMessage()        ← channel closed
+                             └─ WriteMessage()        ← channel 关闭
                                                       WriteCloseMessage()
                                                       return
 ```
 
-**Key insight**: The HTTP handler (`Handle`) returns immediately after launching the two goroutines. The connection's entire remaining lifetime — minutes or hours — is managed by readPump and writePump. Gin's timeouts no longer apply; the connection has been hijacked from HTTP.
+**关键洞察**：HTTP handler (`Handle`) 启动两个 goroutine 后立即返回。连接剩余的全部生命周期（分钟到小时）由 readPump 和 writePump 管理。Gin 的超时不再适用——连接已从 HTTP hijack 出来。
 
-### Message Routing
+### 消息路由
 
 ```
-Sender's readPump → (future: MessageService → DB) → Hub.SendToUser(receiverID)
-                                                          │
-                                                    Hub.Find(receiverID)
-                                                    → all receiver's Clients
-                                                    → each Client's send channel
-                                                    → receiver's writePump
+发送方 readPump → MessageService → DB (持久化) → Hub.SendToUser(receiverID)
+                                                        │
+                                                  Hub.Find(receiverID)
+                                                  → 接收方所有 Client
+                                                  → 每个 Client 的 send channel
+                                                  → 接收方 writePump
 ```
 
-`Hub.SendToUser` marshals the message envelope **once** and pushes the same `[]byte` to all connections belonging to that user. This avoids redundant JSON encoding when a user has multiple devices.
+`Hub.SendToUser` 将消息信封只 marshal **一次**，然后将相同 `[]byte` 推送到该用户的所有连接。当用户有多设备时避免重复 JSON 编码。
 
-### Concurrency Safety
+### 并发安全
 
-| Operation | Mechanism | Why |
-|-----------|-----------|-----|
-| Register/unregister | Channel → single goroutine | Serialized map mutation |
-| Find/IsOnline | RWMutex read lock | Many concurrent readers, no blocking |
-| WebSocket write | Single goroutine per connection | gorilla/websocket not concurrent-write safe |
-| Send to connection | Buffered channel (256) + non-blocking send | Prevents slow clients from blocking Hub |
+| 操作 | 机制 | 原因 |
+|------|------|------|
+| Register/unregister | Channel → 单 goroutine | 序列化 map 变更 |
+| Find/IsOnline | RWMutex 读锁 | 多并发读，互不阻塞 |
+| WebSocket 写 | 每连接单 goroutine | gorilla/websocket 不支持并发写 |
+| 发送到连接 | 有缓冲 channel (256) + 非阻塞发送 | 防止慢客户端阻塞 Hub |
 
-## Dependency Injection
+## 消息系统架构 (Phase 3)
 
-`cmd/server/main.go` is the **Composition Root** — the single place where all concrete types are wired together. No DI framework. No global state. Every component receives its dependencies through constructors.
-
-This makes the dependency graph explicit and testable: swap a real `UserRepo` for a stub by passing a different implementation.
-
-## Evolution Path
-
-The architecture is designed to evolve without rewrites:
-
-- **Phase 2.1 (WebSocket Foundation)**: ✅ Complete. `gateway` package for WebSocket connections. Hub+Client goroutine model. Heartbeat via server-side pings. Device limit at HTTP upgrade layer. Existing auth service reused via `ValidateAccessToken`.
-- **Phase 2.2 (Online Status)**: ✅ Complete. Redis-based presence tracking integrated with Hub. First/last connection detection in Hub.Run() event loop.
-- **Phase 3 (Messaging System)**: ✅ Complete. Message model, repository, service — connecting readPump's dispatch through Hub callbacks to persistence and routing. See [Messaging Architecture](#messaging-architecture-phase-3) below.
-- **Phase 4 (Service Decomposition)**: Repository layer can be split into separate services with HTTP/gRPC boundaries. Service layer stays the same — only the repository implementation changes.
-- **Phase 5 (Observability)**: Middleware layer is the natural place to add metrics, tracing, and structured logging — injected without touching business logic.
-
-## Messaging Architecture (Phase 3)
-
-### Message Flow
+### 消息流
 
 ```
   Client A                         Server                          Client B
@@ -152,70 +130,78 @@ The architecture is designed to evolve without rewrites:
      │── message.send ──────────────▶│                                │
      │                                │  readPump → Hub.OnMessage     │
      │                                │  → MessageService             │
-     │                                │     ├─ Parse + Validate       │
-     │                                │     ├─ Check friendship       │
+     │                                │     ├─ 解析 + 校验            │
+     │                                │     ├─ 检查好友关系            │
      │                                │     ├─ INSERT INTO messages   │
      │                                │     ├─ Hub.Find(B)            │
-     │                                │     └─ route:                 │
-     │                                │        online → message.new ──▶│
-     │                                │        offline → skip          │
+     │                                │     └─ 路由:                  │
+     │                                │        在线 → message.new ──▶│
+     │                                │        离线 → 跳过             │
      │◀── message.ack ───────────────│                                │
 ```
 
-### Dependency Graph
-
-```
- gateway.Handler ──→ service.AuthService (existing)
- gateway.Client  ──→ hub.OnMessage callback ──→ service.MessageService
- gateway.Hub     ──→ hub.OnConnect callback ──→ service.MessageService
- service.MessageService ──→ messageStore interface ──→ postgres.MessageRepo
- service.MessageService ──→ friendChecker interface ──→ postgres.FriendRepo
- service.MessageService ──→ MessageRouter interface ──→ gateway.Hub
-```
-
-### Avoiding Circular Dependencies
-
-The `gateway` and `service` packages have a bidirectional relationship:
-- `gateway` imports `service` for `AuthService` (Handler) and `MessageService` (callbacks)
-- `service` needs `gateway.Hub` for routing
-
-This is resolved through interfaces defined in the service package:
-- `MessageRouter` (SendToUser, IsOnline) — implemented by Hub via structural typing
-- `messageStore` / `friendChecker` — unexported interfaces for test injection
-
-Hub never imports service directly — it stores function pointers (`OnMessage`, `OnConnect`)
-set by main.go. The composition root pattern makes this wiring explicit.
-
-### Callback Pattern
-
-Hub exposes two callback fields for extensibility without adding type dependencies:
-
-| Callback | Trigger | Set to |
-|----------|---------|--------|
-| `OnMessage(userID, raw)` | Client sends `message.send` frame | `MessageService.HandleIncomingMessage` |
-| `OnConnect(userID)` | New WebSocket connection registered | `MessageService.DeliverOfflineMessages` |
-
-This pattern is extensible. Future features (typing indicators, read receipts) can add
-their own callbacks without modifying Hub or Client.
-
-### Message Status Lifecycle
+### 消息状态生命周期
 
 ```
   sent ─────────→ delivered ─────────→ read (Phase 3.x)
-  (persisted)     (WebSocket write)   (client ACK)
+  (已持久化)       (WebSocket 已写入)    (客户端 ACK)
 ```
 
-- **sent**: Default on INSERT. Message is in DB but receiver is offline.
-- **delivered**: Hub found at least one connection and pushed the message.
-- **read**: Reserved. Will use `message.read` WebSocket frame from client.
+- **sent**：INSERT 时的默认值。消息在 DB 中但接收方离线。
+- **delivered**：Hub 找到至少一个连接并推送消息。
+- **read**：保留。将通过客户端的 `message.read` WebSocket 帧实现。
 
-### Offline Message Delivery
+### 离线消息投递
 
-On WebSocket connect (`OnConnect` → `DeliverOfflineMessages`):
-1. Query `WHERE receiver_id=$1 AND status='sent' ORDER BY created_at ASC`
-2. Push each message via `Hub.SendToUser` as `message.new`
-3. Update status to `delivered`
+WebSocket 连接时 (`OnConnect` → `DeliverOfflineMessages`)：
+1. 查询 `WHERE receiver_id=$1 AND status='sent' AND recalled_at IS NULL ORDER BY created_at ASC`
+2. 逐条推送 `message.new` 到接收方
+3. 更新状态为 `delivered`
 
-Race condition: `OnConnect` runs in a goroutine, Hub may not have processed
-register yet. This is benign — if delivery fails, messages stay as `sent` and
-will be retried on the next connect.
+### 消息撤回
+
+```
+  Client A                         Server                          Client B
+     │                                │                                │
+     │── message.recall ─────────────▶│                                │
+     │                                │  MessageService.handleRecall  │
+     │                                │     ├─ 解析 message_id        │
+     │                                │     ├─ FindByID               │
+     │                                │     ├─ 鉴权 (仅发送者)         │
+     │                                │     ├─ 时间限制 (2分钟)        │
+     │                                │     ├─ 幂等检查               │
+     │                                │     ├─ UPDATE recalled_at     │
+     │                                │     └─ 广播:                  │
+     │◀── message.recalled ──────────│                                │
+     │                                │── message.recalled ──────────▶│
+```
+
+- **授权**：只有消息发送者可以撤回
+- **时间限制**：2 分钟窗口（与微信/Slack 一致）
+- **幂等**：已撤回消息重复请求返回成功但不更新 DB
+- **广播**：通知发送方（所有设备）和接收方（若在线）
+- **对话历史**：已撤回消息的 content 在 API 响应中被清空，保留 `recalled_at` 时间戳
+
+### 避免循环依赖
+
+`gateway` 和 `service` 包有双向关系：
+- `gateway` 需要 `service`（`AuthService`、`MessageService` 回调）
+- `service` 需要 `gateway.Hub`（消息路由）
+
+通过两种模式解决：
+
+1. **消费者包中定义接口**：`service` 定义 `MessageRouter` 接口（`SendToUser`、`IsOnline`），`gateway.Hub` 通过 Go 结构类型满足它
+2. **函数指针回调**：Hub 存储 `OnMessage`、`OnConnect` 函数指针，由 `main.go` 设置
+
+## 依赖注入
+
+`cmd/server/main.go` 是**组合根**——所有具体类型被组装在一起的唯一位置。没有 DI 框架，没有全局状态。每个组件通过构造函数接收其依赖。
+
+## 演进路径
+
+- **Phase 1（核心后端）**：✅ 完成。用户注册/登录、JWT 认证、好友系统、PostgreSQL/Redis。
+- **Phase 2（实时消息）**：✅ 完成。WebSocket 网关、在线状态、私聊、心跳、离线消息。
+- **Phase 3（消息系统）**：✅ 完成。消息持久化、撤回、对话历史、游标分页。
+- **Phase 4（可扩展性）**：多 WebSocket 网关实例，需解决：跨实例消息路由（Redis pub/sub）、在线状态共享存储、持久化管道（Kafka）。
+- **Phase 5（可观测性）**：中间件层是添加 metrics/tracing/logging 的自然位置。
+- **Phase 6（生产就绪）**：Docker Compose、CI/CD、配置管理、优雅关闭、负载测试。

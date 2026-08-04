@@ -1,236 +1,143 @@
-# Learning Notes
+# 学习笔记
 
-## Go Concurrency: Graceful Shutdown Pattern
+## Go 并发：优雅关闭
 
-**Concept**: When a Go HTTP server needs to shut down cleanly (close DB connections, flush logs), you can't just `os.Exit()`. You need to:
-1. Catch OS signals (`signal.Notify`)
-2. Call `srv.Shutdown(ctx)` to stop accepting new connections while letting in-flight requests finish
-3. Use `defer` to close resources in reverse order of creation
+`signal.Notify` 捕获 OS 信号 → `srv.Shutdown(ctx)` 停止接受新连接但让进行中的请求完成 → `defer` 按创建相反顺序关闭资源。
 
-**Key insight**: `log.Fatalf` calls `os.Exit(1)` which skips all defers. Never use it inside goroutines that need cleanup. Use channels to propagate errors to the main goroutine instead.
+关键教训：`log.Fatalf` 调用 `os.Exit(1)` 跳过所有 defers。永远不要在需要清理的 goroutine 中使用。用 channel 将错误传播到主 goroutine。
 
-**Production practice**: Always set a shutdown timeout (`context.WithTimeout`). If connections don't drain within the timeout, the server forces shutdown — better than hanging indefinitely.
+## Go 并发：Channel-as-Signal
 
-## Go Concurrency: Select Statement for Multi-Source Blocking
+Go 中关闭 channel 是广播——所有阻塞在 `<-ch` 的 goroutine 立即唤醒。
 
-`select` blocks until ONE case is ready. Used in `main.go` to wait for either:
-- A server error (listen failure) → immediate shutdown with error
-- An OS signal (Ctrl+C) → graceful shutdown
+我们的连接关闭利用这一点：readPump 检测到断开 → `close(c.send)` 广播"连接结束"。writePump 阻塞在 `<-c.send`，channel 关闭时以 `ok == false` 唤醒，干净退出。
 
-This is cleaner than two goroutines coordinating through shared state.
+**Why not done channel?** 单独的 `done chan struct{}` 要求 writePump 同时 select `send` 和 `done`——更复杂。关闭 send channel 本身一举两得：唤醒 writePump 并阻止新消息发送。
 
-## Database: Why Transactions Matter
-
-`AcceptRequest` does two writes: UPDATE + INSERT. Without a transaction, if the INSERT fails after a successful UPDATE, the database is in an inconsistent state — half the friendship exists.
-
-PostgreSQL transactions wrap multiple statements in an all-or-nothing unit. `BEGIN` ... work ... `COMMIT` (or `ROLLBACK` on error). The `defer tx.Rollback(ctx)` pattern ensures the transaction is always cleaned up, even if the function panics.
-
-**Production practice**: Never assume two sequential writes are safe. Always ask: "What happens if the second one fails?" If the answer is "inconsistent data," you need a transaction.
-
-## Security: Token Replay Attacks
-
-A refresh token should be single-use. Without atomicity, two concurrent requests could both validate the same token and both issue new ones — a replay attack.
-
-Redis `GETDEL` solves this: it's an atomic "get the value AND delete the key" operation. The first caller gets the value; the second gets `nil`. No race window.
-
-**Production practice**: For any "check-then-consume" operation on a shared resource, use an atomic primitive. Databases have `SELECT ... FOR UPDATE`. Redis has `GETDEL`, `SET NX`, and Lua scripts.
-
-## Security: User Enumeration
-
-When login returns "user not found" vs "wrong password," an attacker can enumerate valid usernames. Our login returns the same message for both cases: "invalid username or password."
-
-Trade-off: Worse UX for legitimate users who typo their username. Production systems sometimes accept this trade-off or mitigate with rate limiting.
-
-## API Design: Error Code Mapping
-
-Domain errors (Go `error` values) shouldn't know about HTTP status codes — that couples business logic to HTTP. Our approach:
-- Repository/Service returns `AppError{Err: sentinel, Message: "..."}`
-- Handler maps sentinel → HTTP status via `errorStatus()`
-- If a new error type is added, only `errorStatus()` needs updating
-
-**Production practice**: This is the "error envelope" pattern. It keeps the transport layer (HTTP, gRPC, etc.) independent of domain logic.
-
-## Project Structure: Composition Root
-
-`cmd/server/main.go` wires ALL dependencies in one place. Every component receives exactly what it needs through its constructor. No package-level globals, no `init()` functions, no service locator.
-
-**Why this matters**: You can read `main.go` and understand the entire system's dependency graph. When testing, you can construct a Service with a mock Repository — no need for monkey-patching.
-
-## Redis: TTL-Based Expiry
-
-Refresh tokens stored in Redis use `SET key value EX <seconds>`. When the TTL expires, Redis automatically deletes the key. This means:
-- No cron job needed to clean up expired tokens
-- Token expiry is free — just don't extend the TTL
-- If Redis restarts, tokens are gone (acceptable — users just re-login)
-
-**Production practice**: Always set TTL on cached data. Redis memory is finite; unbounded growth leads to eviction or OOM.
-
-## WebSocket: How HTTP Becomes a Long-Lived Connection
-
-**Concept**: WebSocket starts as an HTTP request and upgrades to a bidirectional TCP socket.
-
-1. Client sends `GET /ws` with `Upgrade: websocket` and `Connection: Upgrade` headers
-2. Server responds `101 Switching Protocols` — the TCP connection is no longer HTTP
-3. The same TCP socket now carries WebSocket frames, not HTTP requests
-4. Either side can send a message at any time — full duplex
-
-**Key insight**: After the upgrade, the HTTP server (`http.Server`, Gin) no longer manages this connection. `ReadTimeout` and `WriteTimeout` don't apply. The connection's lifecycle is entirely in the application's hands — hence the need for readPump/writePump goroutines.
-
-**Why JWT in query parameter, not header**: WebSocket's JavaScript API (`new WebSocket(url)`) only accepts a URL. No way to set custom headers. Alternatives like `Sec-WebSocket-Protocol` hack exist but are not idiomatic. Query parameter is simple, universal, and works with every WebSocket client.
-
-## Go Concurrency: Hub Goroutine Pattern
-
-**Concept**: A single goroutine owns mutable state. All mutations arrive through channels and are processed sequentially — no locks needed for mutation.
-
-This is the "communicate by sharing memory" inversion: instead of multiple goroutines sharing a map protected by a mutex, a single goroutine owns the map and others communicate with it through channels.
-
-```
-Handler goroutine:     Hub goroutine:           Handler goroutine:
-     │                      │                        │
-     │── register ─────────▶│                        │
-     │                      │  clients["A"]["1"]=c   │
-     │                      │                        │
-     │                      │◀── unregister ─────────│
-     │                      │  delete from map       │
-```
-
-**Why channels for mutation but RWMutex for reads?** Find/IsOnline need to return immediately — they can't wait for a channel round-trip. Since reads vastly outnumber writes and don't conflict with each other, RWMutex is ideal: many concurrent readers, exclusive writer.
-
-This is a common Go pattern: **channel for ownership transfer, mutex for read-heavy shared state**.
-
-## Go Concurrency: Channel-as-Signal (Close to Broadcast)
-
-**Concept**: In Go, closing a channel is a broadcast. Every goroutine blocked on `<-ch` or `range ch` unblocks immediately.
-
-Our connection shutdown uses this:
-
-```
-readPump (detecting disconnect):
-    close(c.send)   ← broadcasts "connection is done"
-
-writePump (blocked on <-c.send):
-    message, ok := <-c.send
-    ok == false     ← channel closed, exit loop
-```
-
-**Why not a done channel?** A separate `done chan struct{}` would require writePump to select on both `send` and `done` — more complex. Closing the send channel itself kills two birds with one stone: it unblocks writePump AND prevents new messages from being sent.
-
-**The drain pattern**: writePump's defer does `for range c.send {}`. After the channel is closed, this drains any leftover buffered messages. Without this drain, readPump's `close(c.send)` could block if writePump hasn't consumed everything yet — the channel can only be closed when no sends are pending. Since readPump already sent `unregister` before closing, and the Hub might still be routing messages to this client, the drain prevents a deadlock.
-
-## Go Concurrency: Non-Blocking Channel Send
-
-**Concept**: A `select` with a `default` case makes a channel send non-blocking.
+## Go 并发：非阻塞 Channel 发送
 
 ```go
 select {
 case c.send <- data:
-    // Message enqueued
+    // 消息入队
 default:
-    // Buffer full — drop message
+    // buffer 满——丢弃消息
 }
 ```
 
-**Why drop messages instead of blocking?** If writePump is slow (network congestion, slow client), blocking the sender (Hub.SendToUser) would block the entire message routing pipeline. One slow client would delay messages to ALL clients. Dropping is safe because the message is already persisted in PostgreSQL — the receiver can retrieve it later.
+**为什么丢弃而非阻塞？** 如果 writePump 慢（网络拥塞），阻塞发送方（Hub.SendToUser）会阻塞整个消息路由管道。一个慢客户端会延迟所有客户端的消息。丢弃是安全的——消息已持久化在 PostgreSQL，接收方可后续取回。
 
-**Production practice**: Back-pressure is the alternative. Instead of dropping, the sender blocks and the slowdown propagates backward — eventually the client's send rate is throttled. This is TCP's approach. For IM, dropping + DB fallback is simpler and more user-friendly (other conversations aren't affected by one slow recipient).
+## Go 并发：Hub Goroutine 模式
 
-## WebSocket: Why Concurrent Writes Are Forbidden
+单 goroutine 拥有可变状态。所有变更通过 channel 到达，顺序处理——变更期间无需锁。
 
-gorilla/websocket explicitly documents that connections support at most one concurrent reader and one concurrent writer. Two goroutines calling `WriteMessage` simultaneously will corrupt the WebSocket frame stream.
+"通过共享内存来通信"的反转：不是多个 goroutine 共享 map + mutex 保护，而是一个 goroutine 拥有 map，其他 goroutine 通过 channel 与它通信。
 
-**The solution**: A dedicated write goroutine (writePump) reads from a channel. Anyone wanting to send data writes to the channel, not the WebSocket. The channel serializes all writes.
+**为什么 channel 做变更但 RWMutex 做读？** Find/IsOnline 需要立即返回——不能等 channel 往返。读远多于写且互不冲突，RWMutex 理想：多并发读者，排他写者。
 
-This is an instance of the **fan-in pattern**: multiple senders (Hub routing, ACKs, pings) → channel → single consumer (writePump → WebSocket).
+## Go 设计：打破循环依赖
 
-## Design: When to Use Buffered vs Unbuffered Channels
+**问题**：`gateway` 导入 `service`，`service` 需要 `gateway.Hub`——Go 禁止循环导入。
 
-| Channel | Buffer | Reason |
-|---------|--------|--------|
-| `Hub.register` | 64 | Handler shouldn't block waiting for Hub — fire and continue |
-| `Hub.unregister` | 64 | Same — readPump is already in shutdown path, can't stall |
-| `Client.send` | 256 | Decouples Hub routing from network I/O speed. A burst of messages queues in memory, not in Hub's routing loop |
+**解法——两种互补模式**：
 
-**Rule of thumb**: Buffer when the sender and receiver operate at different speeds and the sender shouldn't wait. Don't buffer when you need the sender to block as back-pressure.
+1. **消费者包中定义接口**：`service` 定义 `MessageRouter` 接口。`gateway.Hub` 通过 Go 结构类型满足它。打破了一个方向的循环。
 
-The register/unregister channels were originally unbuffered. Buffering them (64 slots) prevents a deadlock scenario: if Hub.Run() is slow processing a message, multiple concurrent connections or disconnections would block the Gin handler goroutines. With 64-slot buffers, up to 64 connections can register or disconnect before the Hub needs to catch up.
+2. **函数指针回调**：Hub 存储函数指针而非导入 service 类型。组合根（`main.go`）设置这些指针。Hub 完全不知道它们做什么。
 
-## Go Design: Breaking Circular Imports with Interfaces and Callbacks
+Go 的结构类型意味着你可以在使用的包中定义接口，其他包的类型只要有匹配的方法就自动满足——与 Java/C# 必须显式声明 `implements` 相反。
 
-**Problem**: `gateway` imports `service` (for AuthService), but `service` needs `gateway.Hub` (for routing). Go forbids circular package imports.
+## 安全：Token 重放攻击
 
-**Solution — two complementary patterns**:
+Refresh token 应单次使用。没有原子性的话，两个并发请求可能都通过校验，都签发新 token——重放攻击。
 
-1. **Interface in consumer package**: `service` defines `MessageRouter` interface with the methods it needs (`SendToUser`, `IsOnline`). `gateway.Hub` satisfies this interface through Go's structural typing — it doesn't need to know the interface exists. This breaks the cycle in one direction.
+Redis `GETDEL` 解决了这个问题：原子性的"获取值并删除 key"。第一个调用者获取值；第二个获取 `nil`。没有竞态窗口。
 
-2. **Function pointer callbacks**: For the reverse direction (Hub needs to call service), Hub stores function pointers (`OnMessage func(...)`, `OnConnect func(...)`) rather than importing the service type. The composition root (`main.go`) sets these pointers. Hub has zero knowledge of what they do — it just calls them.
+**生产实践**：对任何共享资源上的 check-then-consume 操作，使用原子原语。数据库有 `SELECT ... FOR UPDATE`。Redis 有 `GETDEL`、`SET NX` 和 Lua 脚本。
 
-This two-pattern combination is clean and idiomatic: interfaces where you consume, callbacks where you're consumed.
+## 安全：用户枚举
 
-**Key insight**: Go's structural typing means you can define an interface in the package that USES it, and any type from any other package automatically satisfies it if the methods match. This is the opposite of Java/C# where types must explicitly declare `implements`.
+登录时返回"用户名或密码错误"而非"用户不存在"/"密码错误"。攻击者无法区分两者，防止枚举有效用户名。
 
-## Design: Message Routing with Callbacks
+## 数据库：为什么事务重要
 
-The Hub callback pattern is a lightweight alternative to event buses or message brokers for intra-process communication:
+`AcceptRequest` 做两次写：UPDATE + INSERT。没有事务的情况下，如果 INSERT 在 UPDATE 成功后失败，数据库处于不一致状态——一半好友关系存在。
 
-```go
-// Hub — provides but doesn't consume
-type Hub struct {
-    OnMessage func(userID string, raw []byte)
-    OnConnect func(userID string)
-}
+PostgreSQL 事务包装多条语句为 all-or-nothing 单元。`defer tx.Rollback(ctx)` 确保事务一定会被清理，即使函数 panic。
 
-// MessageService — consumes but doesn't provide
-func (s *MessageService) HandleIncomingMessage(userID string, raw []byte) { ... }
+**生产实践**：永远不要假设两次顺序写是安全的。始终问："如果第二次失败了会怎样？"如果答案是"数据不一致"，就需要事务。
 
-// main.go — the only place that knows both
-hub.OnMessage = messageService.HandleIncomingMessage
-```
+## 数据库：游标分页用于实时数据
 
-This is simpler than:
-- **Channels**: Would need a dedicated goroutine to read and dispatch
-- **Interfaces**: Would create circular imports (service defines interface, gateway implements it, gateway imports service for other things)
-- **Event bus**: Overkill for a single-process application
+Offset 分页对频繁变化的数据有问题：新消息到达导致行位移，翻页出现重复或遗漏。
 
-**When to use callbacks vs interfaces**:
-- Interface: when the consumer defines what it needs and many implementations exist
-- Callback: when one component needs to notify another without knowing its type
+游标分页：`WHERE created_at < $cursor ORDER BY created_at DESC LIMIT n`。用上一页最后一条的时间戳作为下一页的起点。新消息不影响已有页面。
 
-## Design: Server-Generated vs Client-Generated IDs
+**取舍**：游标分页不能跳转到任意页——只有"上一页""下一页"。对聊天记录这是正确行为：用户是滚动，不是输入"第 5 页"。
 
-In messaging systems, who generates the message ID determines the trust model:
+## API 设计：错误码映射
 
-**Server-generated (our approach)**:
-- Server is the single source of truth
-- No conflict resolution needed
-- Client can't forge timestamps or IDs
-- Trade-off: client doesn't know ID until ACK arrives
+领域错误（Go `error` 值）不应知道 HTTP 状态码——这会把业务逻辑耦合到 HTTP。我们的方式：
+- Repository/Service 返回 `AppError{Err: sentinel, Message: "..."}`
+- Handler 通过 `errorStatus()` 将 sentinel 映射为 HTTP 状态码
+- 新增错误类型只需更新 `errorStatus()`
 
-**Client-generated (some P2P systems)**:
-- Optimistic UI: client knows ID immediately
-- Conflict resolution needed: what if two clients use the same ID?
-- Server must validate uniqueness
+**生产实践**：这是"错误信封"模式。保持传输层（HTTP、gRPC 等）独立于领域逻辑。
 
-For a client-server IM system, server-generated IDs are the standard choice. The ~5ms ACK delay is imperceptible to users — the UI shows the message locally and updates it with the server ID on ACK.
+## 项目结构：组合根
 
-## Database: Cursor-Based Pagination for Real-Time Data
+`cmd/server/main.go` 在一个地方组装所有依赖。每个组件通过构造函数接收它需要的。没有包级别全局变量，没有 `init()` 函数，没有 service locator。
 
-Offset-based pagination (`OFFSET 20 LIMIT 10`) is problematic for data that changes frequently:
+**为什么重要**：可以读 `main.go` 就理解整个系统的依赖图。测试时可以构造 Service + mock Repository——不需要 monkey-patching。
 
-```
-Page 1: SELECT ... ORDER BY created_at DESC LIMIT 10 OFFSET 0  → messages #1-10
-[3 new messages arrive]
-Page 2: SELECT ... ORDER BY created_at DESC LIMIT 10 OFFSET 10 → messages #11-20
-                                                                    ↑ misses #11-13 (now shifted)
-                                                                    ↑ duplicates #8-10
-```
+## WebSocket：HTTP 如何变为长连接
 
-Cursor-based pagination avoids this:
-```
-Page 1: SELECT ... WHERE created_at < NOW() ORDER BY created_at DESC LIMIT 10
-        → messages #1-10, cursor = created_at of #10
-[3 new messages arrive]
-Page 2: SELECT ... WHERE created_at < cursor ORDER BY created_at DESC LIMIT 10
-        → messages #11-20 (correct, no duplicates or gaps)
-```
+1. 客户端发送 `GET /ws` 携带 `Upgrade: websocket` 和 `Connection: Upgrade` 头
+2. 服务器回复 `101 Switching Protocols`——TCP 连接不再是 HTTP
+3. 同一 TCP socket 现在承载 WebSocket 帧，不是 HTTP 请求
 
-**Trade-off**: Cursor pagination can't jump to arbitrary pages — only "next page" and "previous page." For chat history, this is the right behavior; users scroll, they don't type "page 5."
+升级后 HTTP 服务器（`http.Server`、Gin）不再管理此连接。`ReadTimeout`/`WriteTimeout` 不再适用。连接的生命周期完全在应用手中——因此需要 readPump/writePump goroutine。
+
+**为什么 JWT 在查询参数而非请求头**：WebSocket JavaScript API（`new WebSocket(url)`）只接受 URL，无法设置自定义请求头。查询参数简单、通用，所有 WebSocket 客户端都支持。
+
+## WebSocket：为什么禁止并发写
+
+gorilla/websocket 明确文档说明连接最多支持一个并发 reader 和一个并发 writer。两个 goroutine 同时调用 `WriteMessage` 会损坏 WebSocket 帧流。
+
+**解决方案**：专用写 goroutine（writePump）从 channel 读取。任何想发数据的地方写入 channel，不写 WebSocket。channel 序列化所有写操作。
+
+这是 **fan-in 模式**：多个发送方 → channel → 单消费者。
+
+## Redis：TTL 过期
+
+Refresh token 存 Redis 使用 `SET key value EX <seconds>`。TTL 过期后 Redis 自动删除 key：
+- 不需要 cron job 清理过期 token
+- Token 过期免费——只要不续期
+- Redis 重启 token 丢失（可接受——用户重新登录即可）
+
+在线状态同理：`presence:<userID>` key 有 60s TTL，作为崩溃安全网。正常断开时 Hub 主动 DEL，崩溃时 TTL 自动清除僵尸 key。
+
+## 设计：服务端生成 vs 客户端生成 ID
+
+**服务端生成（我们的方式）**：
+- 服务端是唯一真相源
+- 不需要冲突解决
+- 客户端不能伪造时间戳或 ID
+- 取舍：客户端等 ACK 才知道 ID
+
+**客户端生成（部分 P2P 系统）**：
+- 乐观 UI：客户端立刻知道 ID
+- 需要冲突解决
+- 服务端必须校验唯一性
+
+对于客户端-服务器 IM 系统，服务端生成 ID 是标准选择。~5ms ACK 延迟用户感知不到。
+
+## 设计：何时使用有缓冲 vs 无缓冲 Channel
+
+| Channel | 缓冲 | 原因 |
+|---------|------|------|
+| `Hub.register` | 64 | Handler 不应阻塞等待 Hub |
+| `Hub.unregister` | 64 | readPump 已在关闭路径中，不能停顿 |
+| `Client.send` | 256 | 解耦 Hub 路由和网络 I/O 速度 |
+
+**经验法则**：当发送方和接收方速度不同且发送方不应等待时，用缓冲。当你需要发送方阻塞作为反压时，不缓冲。
