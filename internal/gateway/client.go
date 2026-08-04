@@ -67,15 +67,14 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID string, connID string) *Cl
 // closes the send channel, which causes writePump to exit.
 //
 // Message dispatch:
-//   - message.send → Hub.OnMessage callback (set by composition root)
-//   - ping → pong response
+//   - message.send   → Hub.OnMessage callback (set by composition root)
+//   - message.recall → Hub.OnMessage callback
+//   - ping           → pong response
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
 		close(c.send)
 		c.conn.Close()
-		// Closing send channel signals writePump to exit.
-		// writePump drains the channel before returning.
 	}()
 
 	c.conn.SetReadLimit(maxMessageSize)
@@ -103,6 +102,10 @@ func (c *Client) readPump() {
 
 		switch env.Type {
 		case ws.TypeMessageSend:
+			if c.hub.OnMessage != nil {
+				c.hub.OnMessage(c.userID, message)
+			}
+		case ws.TypeMessageRecall:
 			if c.hub.OnMessage != nil {
 				c.hub.OnMessage(c.userID, message)
 			}

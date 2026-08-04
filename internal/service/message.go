@@ -18,9 +18,11 @@ import (
 // Defined as an unexported interface so tests can inject fakes.
 type messageStore interface {
 	Insert(ctx context.Context, msg *model.Message) error
+	FindByID(ctx context.Context, msgID string) (*model.Message, error)
 	FindConversation(ctx context.Context, userA, userB string, before time.Time, limit int) ([]model.Message, error)
 	FindUndelivered(ctx context.Context, userID string) ([]model.Message, error)
 	UpdateStatus(ctx context.Context, msgID string, status model.MessageStatus) error
+	UpdateRecall(ctx context.Context, msgID string) error
 }
 
 // friendChecker is the subset of postgres.FriendRepo that MessageService needs.
@@ -36,6 +38,13 @@ const (
 
 	// defaultContentType is used when the client doesn't specify one.
 	defaultContentType = "text"
+
+	// recallWindow is the maximum time after sending that a message can be recalled.
+	// 2 minutes is the industry standard (WeChat, Slack).
+	recallWindow = 2 * time.Minute
+
+	// recalledPlaceholder replaces the content of recalled messages in API responses.
+	recalledPlaceholder = ""
 )
 
 // MessageService handles message business logic: validation, persistence,
@@ -68,17 +77,11 @@ func NewMessageService(
 // HandleIncomingMessage processes a raw WebSocket message from a connected user.
 // It is intended to be set as Hub.OnMessage callback.
 //
-// Flow:
-//  1. Parse the envelope (must be message.send)
-//  2. Validate content
-//  3. Check friendship
-//  4. Persist to DB
-//  5. Route to receiver via Hub (if online)
-//  6. Send ACK back to sender
+// It dispatches by envelope type:
+//   - message.send   → handleSend
+//   - message.recall → handleRecall
 func (s *MessageService) HandleIncomingMessage(senderID string, raw []byte) {
-	ctx := context.Background()
-
-	// 1. Parse
+	// 1. Parse envelope
 	var env ws.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		log.Printf("msg: parse error from user %s: %v", senderID, err)
@@ -86,10 +89,27 @@ func (s *MessageService) HandleIncomingMessage(senderID string, raw []byte) {
 		return
 	}
 
-	if env.Type != ws.TypeMessageSend {
+	switch env.Type {
+	case ws.TypeMessageSend:
+		s.handleSend(senderID, env)
+	case ws.TypeMessageRecall:
+		s.handleRecall(senderID, env)
+	default:
 		log.Printf("msg: unexpected type %s from user %s", env.Type, senderID)
-		return
 	}
+}
+
+// handleSend processes a message.send envelope.
+//
+// Flow:
+//  1. Parse the payload
+//  2. Validate content
+//  3. Check friendship
+//  4. Persist to DB
+//  5. Route to receiver via Hub (if online)
+//  6. Send ACK back to sender
+func (s *MessageService) handleSend(senderID string, env ws.Envelope) {
+	ctx := context.Background()
 
 	var payload ws.MessageSendPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
@@ -119,10 +139,8 @@ func (s *MessageService) HandleIncomingMessage(senderID string, raw []byte) {
 		Content:     payload.Content,
 		ContentType: payload.ContentType,
 	}
-	// Use a background context: even if the WebSocket connection drops
-	// during this call, we want the message persisted.
 	if err := s.messageRepo.Insert(ctx, msg); err != nil {
-		log.Printf("msg: insert error: %v", err)
+		log.Printf("msg: insert error for user %s: %v", senderID, err)
 		s.sendError(senderID, "server_error", "failed to save message")
 		return
 	}
@@ -136,8 +154,6 @@ func (s *MessageService) HandleIncomingMessage(senderID string, raw []byte) {
 	status := model.MessageStatusSent
 	if delivered {
 		status = model.MessageStatusDelivered
-		// Update status in DB (fire-and-forget — failure is non-critical,
-		// the message will be re-delivered on next connection anyway).
 		if err := s.messageRepo.UpdateStatus(ctx, msg.ID, status); err != nil {
 			log.Printf("msg: update status error: %v", err)
 		}
@@ -146,11 +162,103 @@ func (s *MessageService) HandleIncomingMessage(senderID string, raw []byte) {
 	s.sendAck(senderID, msg.ID, status)
 }
 
+// handleRecall processes a message.recall envelope.
+//
+// Flow:
+//  1. Parse the payload
+//  2. Look up the message from DB
+//  3. Authorize (must be the sender)
+//  4. Check time limit (2 minutes)
+//  5. Update recalled_at in DB
+//  6. Broadcast message.recalled to sender and receiver
+func (s *MessageService) handleRecall(senderID string, env ws.Envelope) {
+	ctx := context.Background()
+
+	var payload ws.MessageRecallPayload
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		log.Printf("recall: payload parse error from user %s: %v", senderID, err)
+		s.sendError(senderID, "parse_error", "invalid recall payload")
+		return
+	}
+
+	if payload.MessageID == "" {
+		s.sendError(senderID, "invalid_message", "message_id is required")
+		return
+	}
+
+	// 2. Look up the message
+	msg, err := s.messageRepo.FindByID(ctx, payload.MessageID)
+	if err != nil {
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && errors.Is(appErr.Err, model.ErrNotFound) {
+			s.sendError(senderID, "message_not_found", "message does not exist")
+			return
+		}
+		log.Printf("recall: find message error: %v", err)
+		s.sendError(senderID, "server_error", "failed to look up message")
+		return
+	}
+
+	// 3. Authorize: only the sender can recall
+	if msg.SenderID != senderID {
+		s.sendError(senderID, "not_sender", "you can only recall your own messages")
+		return
+	}
+
+	// 4. Check if already recalled (idempotent)
+	if msg.RecalledAt != nil {
+		// Already recalled — return success without updating again.
+		s.sendRecallNotification(senderID, msg.ReceiverID, msg.ID, *msg.RecalledAt)
+		return
+	}
+
+	// 5. Check time limit
+	if time.Since(msg.CreatedAt) > recallWindow {
+		s.sendError(senderID, "recall_time_exceeded",
+			fmt.Sprintf("messages can only be recalled within %v", recallWindow))
+		return
+	}
+
+	// 6. Persist the recall
+	if err := s.messageRepo.UpdateRecall(ctx, msg.ID); err != nil {
+		var appErr *model.AppError
+		if errors.As(err, &appErr) && errors.Is(appErr.Err, model.ErrNotFound) {
+			s.sendError(senderID, "message_not_found", "message does not exist")
+			return
+		}
+		log.Printf("recall: update error for msg %s: %v", truncate(msg.ID), err)
+		s.sendError(senderID, "server_error", "failed to recall message")
+		return
+	}
+
+	now := time.Now()
+	log.Printf("recall: msg %s recalled by %s", truncate(msg.ID), senderID)
+
+	// 7. Broadcast to both parties
+	s.sendRecallNotification(senderID, msg.ReceiverID, msg.ID, now)
+}
+
+// sendRecallNotification broadcasts message.recalled to both the sender
+// and the receiver.
+func (s *MessageService) sendRecallNotification(senderID, receiverID, msgID string, recalledAt time.Time) {
+	env := ws.MustEnvelope(ws.TypeMessageRecalled, ws.MessageRecalledPayload{
+		MessageID:  msgID,
+		RecalledAt: recalledAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
+	// Send to sender (all devices) — so other devices of the sender update UI.
+	s.router.SendToUser(senderID, env)
+	// Send to receiver (if online) — so receiver sees the recall immediately.
+	if s.router.IsOnline(receiverID) {
+		s.router.SendToUser(receiverID, env)
+	}
+}
+
 // DeliverOfflineMessages finds undelivered messages for a user and pushes them
 // through their WebSocket connections. Called after a new connection is established.
 //
 // Messages are delivered in chronological order (oldest first). After successful
-// delivery, status is updated to 'delivered'.
+// delivery, status is updated to 'delivered'. Recalled messages are excluded by
+// the repository query.
 func (s *MessageService) DeliverOfflineMessages(userID string) {
 	ctx := context.Background()
 	msgs, err := s.messageRepo.FindUndelivered(ctx, userID)
@@ -167,7 +275,6 @@ func (s *MessageService) DeliverOfflineMessages(userID string) {
 
 	for _, msg := range msgs {
 		s.deliverToUser(userID, &msg)
-		// Update status — use background context.
 		if err := s.messageRepo.UpdateStatus(ctx, msg.ID, model.MessageStatusDelivered); err != nil {
 			log.Printf("msg: update status error for %s: %v", truncate(msg.ID), err)
 		}
@@ -175,12 +282,25 @@ func (s *MessageService) DeliverOfflineMessages(userID string) {
 }
 
 // GetConversation returns paginated message history between two users.
+// Recalled messages have their content replaced with an empty string —
+// the client checks the recalled_at field to display a placeholder.
 func (s *MessageService) GetConversation(userA, userB string, before model.Cursor, limit int) ([]model.Message, error) {
 	ctx := context.Background()
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	return s.messageRepo.FindConversation(ctx, userA, userB, before.Time(), limit)
+	msgs, err := s.messageRepo.FindConversation(ctx, userA, userB, before.Time(), limit)
+	if err != nil {
+		return nil, err
+	}
+	// Mask content of recalled messages. We keep the original in the DB
+	// for audit purposes but never expose it through the API.
+	for i := range msgs {
+		if msgs[i].RecalledAt != nil {
+			msgs[i].Content = recalledPlaceholder
+		}
+	}
+	return msgs, nil
 }
 
 // validate checks that a send request is well-formed.
@@ -209,7 +329,6 @@ func (s *MessageService) validate(p *ws.MessageSendPayload) error {
 func (s *MessageService) checkFriendship(userA, userB string) error {
 	friendship, err := s.friendRepo.FindByUserAndFriend(context.Background(), userA, userB)
 	if err != nil {
-		// Check if it's a "not found" error — they're not friends.
 		var appErr *model.AppError
 		if errors.As(err, &appErr) && errors.Is(appErr.Err, model.ErrNotFound) {
 			return errors.New("you can only send messages to friends")
@@ -230,10 +349,15 @@ func (s *MessageService) deliverToUser(userID string, msg *model.Message) bool {
 		return false
 	}
 
+	content := msg.Content
+	if msg.RecalledAt != nil {
+		content = recalledPlaceholder
+	}
+
 	env := ws.MustEnvelope(ws.TypeMessageNew, ws.MessageNewPayload{
 		ID:          msg.ID,
 		From:        msg.SenderID,
-		Content:     msg.Content,
+		Content:     content,
 		ContentType: msg.ContentType,
 		CreatedAt:   msg.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	})

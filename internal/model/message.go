@@ -52,4 +52,7 @@ type Message struct {
 	ContentType string        `json:"content_type"`
 	Status      MessageStatus `json:"status"`
 	CreatedAt   time.Time     `json:"created_at"`
+	// RecalledAt is set when the sender recalls the message.
+	// nil means the message has not been recalled.
+	RecalledAt *time.Time `json:"recalled_at,omitempty"`
 }

@@ -15,14 +15,16 @@ type MessageType string
 
 const (
 	// Client → Server
-	TypeMessageSend MessageType = "message.send" // send a private message
-	TypePing        MessageType = "ping"         // heartbeat
+	TypeMessageSend   MessageType = "message.send"   // send a private message
+	TypeMessageRecall MessageType = "message.recall"  // recall (撤回) a sent message
+	TypePing          MessageType = "ping"            // heartbeat
 
 	// Server → Client
-	TypeMessageNew MessageType = "message.new" // incoming message from another user
-	TypeMessageAck MessageType = "message.ack" // delivery confirmation
-	TypePong       MessageType = "pong"        // heartbeat response
-	TypeError      MessageType = "error"       // server-side error
+	TypeMessageNew      MessageType = "message.new"      // incoming message from another user
+	TypeMessageAck      MessageType = "message.ack"      // delivery confirmation
+	TypeMessageRecalled MessageType = "message.recalled" // notification that a message was recalled
+	TypePong            MessageType = "pong"             // heartbeat response
+	TypeError           MessageType = "error"            // server-side error
 )
 
 // Envelope is the top-level structure for every WebSocket message.
@@ -42,6 +44,11 @@ type MessageSendPayload struct {
 	ContentType string `json:"content_type,omitempty"` // "text" (default), "image", "file"
 }
 
+// MessageRecallPayload is sent by a client to recall a previously sent message.
+type MessageRecallPayload struct {
+	MessageID string `json:"message_id"` // ID of the message to recall
+}
+
 // --- Server → Client payloads ---
 
 // MessageNewPayload is sent to the receiver when a new message arrives.
@@ -57,6 +64,13 @@ type MessageNewPayload struct {
 type MessageAckPayload struct {
 	ID     string `json:"id"`
 	Status string `json:"status"` // "delivered" or "error"
+}
+
+// MessageRecalledPayload is broadcast to both sender and receiver when a
+// message is successfully recalled.
+type MessageRecalledPayload struct {
+	MessageID  string `json:"message_id"`
+	RecalledAt string `json:"recalled_at"` // ISO 8601
 }
 
 // ErrorPayload carries server-side error details.
