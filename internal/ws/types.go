@@ -57,7 +57,8 @@ type MessageNewPayload struct {
 	From        string `json:"from"` // sender user ID
 	Content     string `json:"content"`
 	ContentType string `json:"content_type,omitempty"`
-	CreatedAt   string `json:"created_at"` // ISO 8601
+	CreatedAt   string `json:"created_at"`             // ISO 8601
+	RecalledAt  string `json:"recalled_at,omitempty"`  // ISO 8601, set only when recalled
 }
 
 // MessageAckPayload confirms delivery status back to the sender.

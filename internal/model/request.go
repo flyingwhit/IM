@@ -26,12 +26,9 @@ type RefreshRequest struct {
 // --- User ---
 
 type UpdateProfileRequest struct {
-	Nickname  *string `json:"nickname,omitempty"`
-	AvatarURL *string `json:"avatar_url,omitempty"`
+	Nickname  *string `json:"nickname,omitempty" binding:"omitnil,min=1,max=100"`
+	AvatarURL *string `json:"avatar_url,omitempty" binding:"omitnil,min=1,max=2048"`
 }
 
 // --- Friend ---
-
-type FriendRequestAction struct {
-	Action string `json:"action" binding:"required,oneof=accept reject"`
-}
+// (friend request actions use URL path segments: /requests/:id/accept, /requests/:id/reject)

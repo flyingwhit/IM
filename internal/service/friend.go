@@ -142,12 +142,12 @@ func (s *FriendService) RemoveFriend(ctx context.Context, friendshipID, userID s
 	})
 }
 
-// ListFriends returns the user's accepted friends.
-func (s *FriendService) ListFriends(ctx context.Context, userID string) ([]model.FriendWithUser, error) {
-	return s.friendRepo.ListFriends(ctx, userID)
+// ListFriends returns the user's accepted friends with pagination.
+func (s *FriendService) ListFriends(ctx context.Context, userID string, offset, limit int) ([]model.FriendWithUser, error) {
+	return s.friendRepo.ListFriends(ctx, userID, offset, limit)
 }
 
-// ListPendingRequests returns incoming pending friend requests.
-func (s *FriendService) ListPendingRequests(ctx context.Context, userID string) ([]model.FriendWithUser, error) {
-	return s.friendRepo.ListPendingRequests(ctx, userID)
+// ListPendingRequests returns incoming pending friend requests with pagination.
+func (s *FriendService) ListPendingRequests(ctx context.Context, userID string, offset, limit int) ([]model.FriendWithUser, error) {
+	return s.friendRepo.ListPendingRequests(ctx, userID, offset, limit)
 }
