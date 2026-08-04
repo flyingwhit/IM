@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -33,14 +34,28 @@ func (s *FriendService) SendRequest(ctx context.Context, userID, targetID string
 	}
 
 	// Check for existing relationship in either direction
-	// (pending, accepted, or blocked)
+	// (pending, accepted, or blocked).
 	existing, err := s.friendRepo.FindByUserAndFriend(ctx, userID, targetID)
-	if err == nil && existing != nil {
+	if err != nil {
+		// Distinguish "not found" (no existing relationship — OK to proceed)
+		// from actual DB errors (must return to caller).
+		var appErr *model.AppError
+		if !errors.As(err, &appErr) || !errors.Is(appErr.Err, model.ErrNotFound) {
+			return nil, fmt.Errorf("check existing friendship: %w", err)
+		}
+	}
+	if existing != nil {
 		return nil, model.NewAppError(model.ErrConflict, "friend relationship already exists")
 	}
 	// Also check reverse direction
 	existing, err = s.friendRepo.FindByUserAndFriend(ctx, targetID, userID)
-	if err == nil && existing != nil {
+	if err != nil {
+		var appErr *model.AppError
+		if !errors.As(err, &appErr) || !errors.Is(appErr.Err, model.ErrNotFound) {
+			return nil, fmt.Errorf("check reverse friendship: %w", err)
+		}
+	}
+	if existing != nil {
 		return nil, model.NewAppError(model.ErrConflict, "friend relationship already exists")
 	}
 
