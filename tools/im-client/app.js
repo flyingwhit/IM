@@ -482,6 +482,10 @@ function handleWsMessage(env) {
     case 'message.ack':
       wsLog('ack', `Message ${env.payload.id}: ${env.payload.status}`);
       break;
+    case 'message.recalled':
+      wsLog('recalled',
+        `Message ${env.payload.message_id} recalled at ${env.payload.recalled_at}`);
+      break;
     case 'pong':
       break;
     case 'error':
@@ -512,6 +516,24 @@ function handleWsSend(e) {
   document.getElementById('ws-msg-content').focus();
 }
 
+function handleWsRecall(e) {
+  e.preventDefault();
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    wsLog('error', 'Not connected.');
+    return;
+  }
+
+  const msgId = document.getElementById('ws-recall-msg-id').value.trim();
+  if (!msgId) return;
+
+  ws.send(JSON.stringify({
+    type: 'message.recall',
+    payload: { message_id: msgId },
+  }));
+  wsLog('sent', `[recall] message_id=${msgId}`);
+  document.getElementById('ws-recall-msg-id').value = '';
+}
+
 // --- Heartbeat (client-initiated ping every 30s) -----------------------------
 let heartbeatTimer = null;
 
@@ -540,6 +562,8 @@ function updateWsUI() {
   document.getElementById('btn-ws-connect').disabled = connected || !sessionStore.isLoggedIn();
   document.getElementById('btn-ws-disconnect').disabled = !connected;
   document.getElementById('btn-ws-send').disabled = !connected;
+  const btnRecall = document.getElementById('btn-ws-recall');
+  if (btnRecall) btnRecall.disabled = !connected;
 }
 
 // --- WebSocket Log -----------------------------------------------------------
@@ -601,6 +625,7 @@ function init() {
   document.getElementById('btn-ws-connect').addEventListener('click', connectWs);
   document.getElementById('btn-ws-disconnect').addEventListener('click', disconnectWs);
   document.getElementById('form-ws-send').addEventListener('submit', handleWsSend);
+  document.getElementById('form-ws-recall').addEventListener('submit', handleWsRecall);
   document.getElementById('btn-clear-log').addEventListener('click', clearWsLog);
 
   refreshSessionUI();
