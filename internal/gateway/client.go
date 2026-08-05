@@ -180,6 +180,11 @@ func (c *Client) Send(env *ws.Envelope) {
 // Non-blocking: if the buffer is full, the message is dropped for this
 // connection. The message is already persisted in DB at this point.
 func (c *Client) sendRaw(data []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("client: send on closed channel for conn %s (recovered)", c.connID)
+		}
+	}()
 	select {
 	case c.send <- data:
 	default:
