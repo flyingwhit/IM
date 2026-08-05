@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -43,7 +44,9 @@ type MessageEvent struct {
 // Producer publishes message events to Kafka.
 // It is safe for concurrent use.
 type Producer struct {
-	writer *kafka.Writer
+	writer       *kafka.Writer
+	publishErrs  atomic.Int64 // count of failed publishes since start
+	publishCount atomic.Int64 // total publish attempts since start
 }
 
 // ProducerConfig holds configuration for the Kafka producer.
@@ -97,14 +100,25 @@ func (p *Producer) Publish(ctx context.Context, event *MessageEvent) {
 
 	// Use the message ID as the key for partitioning.
 	// Messages from the same sender will be ordered within a partition.
+	p.publishCount.Add(1)
 	err = p.writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte(event.SenderID),
 		Value: data,
 	})
 	if err != nil {
+		p.publishErrs.Add(1)
 		// Log but don't propagate — the message is already in PostgreSQL.
 		log.Printf("kafka: publish %s: %v", event.MessageID, err)
 	}
+}
+
+// Stats returns the number of failed and total publish attempts.
+// These can be exposed as Prometheus metrics or health-check endpoints.
+func (p *Producer) Stats() (errors int64, total int64) {
+	if p == nil {
+		return 0, 0
+	}
+	return p.publishErrs.Load(), p.publishCount.Load()
 }
 
 // Close flushes and closes the producer. Call during graceful shutdown.

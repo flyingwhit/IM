@@ -80,10 +80,13 @@ func runAll(cfg *config.Config) error {
 
 	// Cross-instance message broker (Redis Pub/Sub).
 	msgBroker := broker.New(redisClient, cfg.Gateway.InstanceID)
+	defer msgBroker.Close()
 
-	// WebSocket Hub
+	// WebSocket Hub — runs until the hub context is cancelled during shutdown.
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
 	hub := gateway.NewHub(presenceRepo, msgBroker)
-	go hub.Run(context.Background())
+	go hub.Run(hubCtx)
 
 	// Kafka producer (optional — disabled if KAFKA_BROKERS is empty).
 	kafkaProducer := kafkapkg.NewProducer(kafkapkg.ProducerConfig{
@@ -144,6 +147,11 @@ func runAll(cfg *config.Config) error {
 	case <-quit:
 		log.Println("shutting down...")
 	}
+
+	// Stop the Hub first so it stops accepting new WebSocket deliveries
+	// and unsubscribes from the broker before the HTTP server shuts down.
+	hubCancel()
+	log.Println("hub stopped")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
