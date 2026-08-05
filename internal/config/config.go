@@ -22,6 +22,12 @@ type Config struct {
 type ServerConfig struct {
 	Host string
 	Port string
+	// Mode controls which components to run.
+	// "all" (default): everything — HTTP, WebSocket, Kafka producer.
+	// "gateway": WebSocket + message routing only.
+	// "api": REST API only (auth, friends, groups).
+	// "worker": Kafka consumer only (message persistence pipeline).
+	Mode string
 }
 
 // GatewayConfig holds settings for a single gateway instance.
@@ -121,6 +127,7 @@ func Load() (*Config, error) {
 		Server: ServerConfig{
 			Host: getEnv("SERVER_HOST", "0.0.0.0"),
 			Port: getEnv("SERVER_PORT", "8080"),
+			Mode: getEnv("SERVER_MODE", "all"),
 		},
 		DB: DBConfig{
 			Host:     dbHost,

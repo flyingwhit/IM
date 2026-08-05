@@ -29,12 +29,28 @@ func main() {
 }
 
 func run() error {
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	log.Printf("starting in %s mode", cfg.Server.Mode)
+
+	switch cfg.Server.Mode {
+	case "worker":
+		return runWorker(cfg)
+	case "gateway":
+		return runGateway(cfg) // future: WebSocket-only
+	case "api":
+		return runAPI(cfg) // future: REST-only
+	default:
+		return runAll(cfg)
+	}
+}
+
+// runAll starts all components: HTTP server, WebSocket hub, Kafka producer.
+// This is the default mode for development and single-instance deployments.
+func runAll(cfg *config.Config) error {
 	ctx := context.Background()
 
 	// PostgreSQL
@@ -63,16 +79,13 @@ func run() error {
 	presenceRepo := redisrepo.NewPresenceRepo(redisClient)
 
 	// Cross-instance message broker (Redis Pub/Sub).
-	// Enables multi-gateway routing: messages published by one instance
-	// are received by all instances and delivered to local connections.
 	msgBroker := broker.New(redisClient, cfg.Gateway.InstanceID)
 
-	// WebSocket Hub (manages all active connections)
+	// WebSocket Hub
 	hub := gateway.NewHub(presenceRepo, msgBroker)
 	go hub.Run(context.Background())
 
 	// Kafka producer (optional — disabled if KAFKA_BROKERS is empty).
-	// Produces message events for downstream consumers (search, analytics).
 	kafkaProducer := kafkapkg.NewProducer(kafkapkg.ProducerConfig{
 		Brokers: splitBrokers(cfg.Kafka.Brokers),
 		Topic:   cfg.Kafka.TopicMessages,
@@ -87,7 +100,7 @@ func run() error {
 	messageService := service.NewMessageService(messageRepo, friendRepo, groupRepo, groupMessageRepo, hub, kafkaProducer)
 	groupService := service.NewGroupService(groupRepo, userRepo, groupMessageRepo)
 
-	// Wire Hub callbacks so WebSocket frames are dispatched to MessageService.
+	// Wire Hub callbacks
 	hub.OnMessage = messageService.HandleIncomingMessage
 	hub.OnConnect = messageService.DeliverOfflineMessages
 
@@ -117,8 +130,6 @@ func run() error {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	// serverErr channel lets the server goroutine report unexpected
-	// errors back to the main goroutine for clean shutdown.
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("server listening on %s:%s", cfg.Server.Host, cfg.Server.Port)
@@ -127,7 +138,6 @@ func run() error {
 		}
 	}()
 
-	// Block until either a signal or a server error arrives.
 	select {
 	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
@@ -142,6 +152,80 @@ func run() error {
 		log.Printf("shutdown: %v", err)
 	}
 	return nil
+}
+
+// runWorker starts a Kafka consumer that processes message events.
+// It connects to PostgreSQL and Kafka, then blocks until a shutdown signal.
+//
+// Currently the handler logs events — future work includes writing to
+// search indexes, analytics pipelines, or async notification dispatch.
+func runWorker(cfg *config.Config) error {
+	ctx := context.Background()
+
+	// PostgreSQL (for future: write-through processing)
+	pool, err := postgres.NewPool(ctx, cfg.DB.DSN())
+	if err != nil {
+		return fmt.Errorf("connect postgres: %w", err)
+	}
+	defer pool.Close()
+	log.Println("worker: connected to PostgreSQL")
+	_ = pool // used by future handler logic
+
+	brokers := splitBrokers(cfg.Kafka.Brokers)
+	if len(brokers) == 0 {
+		return fmt.Errorf("KAFKA_BROKERS is required for worker mode")
+	}
+
+	consumer := kafkapkg.NewConsumer(kafkapkg.ConsumerConfig{
+		Brokers: brokers,
+		Topic:   cfg.Kafka.TopicMessages,
+		GroupID: cfg.Kafka.ConsumerGroup,
+	})
+	if consumer == nil {
+		return fmt.Errorf("failed to create Kafka consumer")
+	}
+	defer consumer.Close()
+
+	// Handle shutdown gracefully.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		<-quit
+		log.Println("worker: shutting down...")
+		cancel()
+	}()
+
+	log.Printf("worker: consuming from topic=%s group=%s", cfg.Kafka.TopicMessages, cfg.Kafka.ConsumerGroup)
+
+	// handler processes each message event. Currently logs — future work
+	// includes indexing, analytics, and async notification dispatch.
+	handler := func(ctx context.Context, event *kafkapkg.MessageEvent) error {
+		log.Printf("worker: received %s msg=%s from=%s", event.Type, event.MessageID, event.SenderID)
+		// Future: write to Elasticsearch, update analytics counters, etc.
+		return nil
+	}
+
+	return consumer.Run(workerCtx, handler)
+}
+
+// runGateway starts only WebSocket and message routing components.
+// REST endpoints (auth, friends, groups) are not available in this mode.
+// TODO: implement in a future iteration.
+func runGateway(cfg *config.Config) error {
+	_ = cfg
+	return fmt.Errorf("gateway mode not yet implemented — use 'all' mode for now")
+}
+
+// runAPI starts only REST endpoints. WebSocket is not available.
+// Useful for scaling the API tier independently from WebSocket gateways.
+// TODO: implement in a future iteration.
+func runAPI(cfg *config.Config) error {
+	_ = cfg
+	return fmt.Errorf("api mode not yet implemented — use 'all' mode for now")
 }
 
 // splitBrokers splits a comma-separated broker list into a slice.
