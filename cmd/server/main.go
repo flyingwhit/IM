@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/ciel/im/internal/config"
 	"github.com/ciel/im/internal/gateway"
 	"github.com/ciel/im/internal/handler"
+	kafkapkg "github.com/ciel/im/internal/kafka"
 	"github.com/ciel/im/internal/repository/postgres"
 	redisrepo "github.com/ciel/im/internal/repository/redis"
 	"github.com/ciel/im/internal/router"
@@ -69,10 +71,20 @@ func run() error {
 	hub := gateway.NewHub(presenceRepo, msgBroker)
 	go hub.Run(context.Background())
 
+	// Kafka producer (optional — disabled if KAFKA_BROKERS is empty).
+	// Produces message events for downstream consumers (search, analytics).
+	kafkaProducer := kafkapkg.NewProducer(kafkapkg.ProducerConfig{
+		Brokers: splitBrokers(cfg.Kafka.Brokers),
+		Topic:   cfg.Kafka.TopicMessages,
+	})
+	if kafkaProducer != nil {
+		defer kafkaProducer.Close()
+	}
+
 	// Services
 	authService := service.NewAuthService(userRepo, sessionRepo, cfg.JWT)
 	friendService := service.NewFriendService(friendRepo, userRepo)
-	messageService := service.NewMessageService(messageRepo, friendRepo, groupRepo, groupMessageRepo, hub)
+	messageService := service.NewMessageService(messageRepo, friendRepo, groupRepo, groupMessageRepo, hub, kafkaProducer)
 	groupService := service.NewGroupService(groupRepo, userRepo, groupMessageRepo)
 
 	// Wire Hub callbacks so WebSocket frames are dispatched to MessageService.
@@ -130,4 +142,24 @@ func run() error {
 		log.Printf("shutdown: %v", err)
 	}
 	return nil
+}
+
+// splitBrokers splits a comma-separated broker list into a slice.
+// Empty strings return nil, which disables Kafka integration.
+func splitBrokers(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }

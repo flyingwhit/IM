@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	kafkapkg "github.com/ciel/im/internal/kafka"
 	"github.com/ciel/im/internal/model"
 	"github.com/ciel/im/internal/repository/postgres"
 	"github.com/ciel/im/internal/ws"
@@ -77,17 +78,23 @@ type MessageService struct {
 	groupMemberRepo  groupMemberStore
 	groupMessageRepo groupMessageStore
 	router           MessageRouter
+	// kafkaProducer is optional — when nil, Kafka publishing is skipped.
+	// It publishes events after DB persistence for downstream consumers
+	// (search index, analytics, async processing).
+	kafkaProducer *kafkapkg.Producer
 }
 
 // NewMessageService creates a MessageService.
 // The repo parameters are concrete types from the postgres package,
 // but the service stores them as narrow interfaces for testability.
+// kafkaProducer may be nil to disable Kafka event publishing.
 func NewMessageService(
 	messageRepo *postgres.MessageRepo,
 	friendRepo *postgres.FriendRepo,
 	groupMemberRepo *postgres.GroupRepo,
 	groupMessageRepo *postgres.GroupMessageRepo,
 	router MessageRouter,
+	kafkaProducer *kafkapkg.Producer,
 ) *MessageService {
 	return &MessageService{
 		messageRepo:      messageRepo,
@@ -95,6 +102,7 @@ func NewMessageService(
 		groupMemberRepo:  groupMemberRepo,
 		groupMessageRepo: groupMessageRepo,
 		router:           router,
+		kafkaProducer:    kafkaProducer,
 	}
 }
 
@@ -157,6 +165,17 @@ func (s *MessageService) SendMessage(ctx context.Context, senderID, to, content,
 	msg.Status = model.MessageStatusSent
 
 	log.Printf("msg: %s from %s to %s", truncate(msg.ID), senderID, to)
+
+	// 3.5 Publish to Kafka for downstream consumers (fire-and-forget).
+	s.kafkaProducer.Publish(ctx, &kafkapkg.MessageEvent{
+		Type:        "message.sent",
+		MessageID:   msg.ID,
+		SenderID:    msg.SenderID,
+		ReceiverID:  msg.ReceiverID,
+		Content:     msg.Content,
+		ContentType: msg.ContentType,
+		Timestamp:   msg.CreatedAt,
+	})
 
 	// 4. Route to receiver
 	if s.deliverToUser(to, msg) {
@@ -262,6 +281,17 @@ func (s *MessageService) handleGroupSend(senderID string, env ws.Envelope) {
 	}
 
 	log.Printf("group msg: %s from %s to group %s", truncate(msg.ID), senderID, payload.GroupID)
+
+	// 4.5 Publish to Kafka for downstream consumers (fire-and-forget).
+	s.kafkaProducer.Publish(ctx, &kafkapkg.MessageEvent{
+		Type:        "group.message.sent",
+		MessageID:   msg.ID,
+		SenderID:    msg.SenderID,
+		GroupID:     msg.GroupID,
+		Content:     msg.Content,
+		ContentType: msg.ContentType,
+		Timestamp:   msg.CreatedAt,
+	})
 
 	// 5. Route to online members (except the sender).
 	members, err := s.groupMemberRepo.ListMembers(ctx, payload.GroupID)
