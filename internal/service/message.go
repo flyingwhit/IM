@@ -426,10 +426,10 @@ func (s *MessageService) DeliverOfflineMessages(userID string) {
 		for _, msg := range recalled {
 			if msg.RecalledAt != nil {
 				// Only notify the reconnecting user (receiver). The sender
-					// already received the recall notification when they recalled
-					// the message. Using a targeted send avoids a duplicate
-					// push to the sender.
-					s.sendRecallToUser(userID, msg.ID, *msg.RecalledAt)
+				// already received the recall notification when they recalled
+				// the message. Using a targeted send avoids a duplicate
+				// push to the sender.
+				s.sendRecallToUser(userID, msg.ID, *msg.RecalledAt)
 			}
 		}
 	}

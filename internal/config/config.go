@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"time"
@@ -9,15 +11,36 @@ import (
 // Config holds all configuration for the application.
 // Values are loaded from environment variables with sensible defaults.
 type Config struct {
-	Server ServerConfig
-	DB     DBConfig
-	Redis  RedisConfig
-	JWT    JWTConfig
+	Server  ServerConfig
+	DB      DBConfig
+	Redis   RedisConfig
+	JWT     JWTConfig
+	Gateway GatewayConfig
+	Kafka   KafkaConfig
 }
 
 type ServerConfig struct {
 	Host string
 	Port string
+}
+
+// GatewayConfig holds settings for a single gateway instance.
+type GatewayConfig struct {
+	// InstanceID uniquely identifies this gateway among peers.
+	// Used to avoid delivering a message to the same instance twice
+	// via pub/sub round-trip.
+	InstanceID string
+}
+
+// KafkaConfig holds settings for the Kafka event bus.
+// All fields are optional — if Brokers is empty, Kafka integration is disabled.
+type KafkaConfig struct {
+	// Brokers is a comma-separated list of bootstrap servers.
+	Brokers string
+	// TopicMessages is the topic for message events (private + group).
+	TopicMessages string
+	// ConsumerGroup is the group ID for Kafka consumers.
+	ConsumerGroup string
 }
 
 type DBConfig struct {
@@ -119,6 +142,16 @@ func Load() (*Config, error) {
 			AccessExpiry:  parseDuration(getEnv("JWT_ACCESS_EXPIRY", "15m"), 15*time.Minute),
 			RefreshExpiry: parseDuration(getEnv("JWT_REFRESH_EXPIRY", "168h"), 168*time.Hour),
 		},
+		Gateway: GatewayConfig{
+			// Random instance ID if not set — avoids accidental collisions
+			// in development while still allowing explicit IDs in production.
+			InstanceID: getEnv("GATEWAY_INSTANCE_ID", randomInstanceID()),
+		},
+		Kafka: KafkaConfig{
+			Brokers:       getEnv("KAFKA_BROKERS", ""),
+			TopicMessages: getEnv("KAFKA_TOPIC_MESSAGES", "im.messages"),
+			ConsumerGroup: getEnv("KAFKA_CONSUMER_GROUP", "im-worker"),
+		},
 	}
 	return cfg, nil
 }
@@ -148,4 +181,16 @@ func parseDuration(s string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// randomInstanceID generates a random 4-byte hex string for gateway instances.
+// In production, set GATEWAY_INSTANCE_ID explicitly (e.g., via Kubernetes pod name).
+// This default makes development zero-config while avoiding collisions.
+func randomInstanceID() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand.Read can only fail on plan9/wasm; fall back to fixed.
+		return "gw-0000"
+	}
+	return "gw-" + hex.EncodeToString(b)
 }

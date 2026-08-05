@@ -201,4 +201,3 @@ func (h *GroupHandler) GetMessages(c *gin.Context) {
 		"next_cursor": nextCursor,
 	})
 }
-
