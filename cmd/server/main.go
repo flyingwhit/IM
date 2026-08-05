@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ciel/im/internal/broker"
 	"github.com/ciel/im/internal/config"
 	"github.com/ciel/im/internal/gateway"
 	"github.com/ciel/im/internal/handler"
@@ -59,8 +60,13 @@ func run() error {
 	sessionRepo := redisrepo.NewSessionRepo(redisClient)
 	presenceRepo := redisrepo.NewPresenceRepo(redisClient)
 
+	// Cross-instance message broker (Redis Pub/Sub).
+	// Enables multi-gateway routing: messages published by one instance
+	// are received by all instances and delivered to local connections.
+	msgBroker := broker.New(redisClient, cfg.Gateway.InstanceID)
+
 	// WebSocket Hub (manages all active connections)
-	hub := gateway.NewHub(presenceRepo)
+	hub := gateway.NewHub(presenceRepo, msgBroker)
 	go hub.Run(context.Background())
 
 	// Services

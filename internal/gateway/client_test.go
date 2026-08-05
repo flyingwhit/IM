@@ -9,7 +9,7 @@ import (
 )
 
 func TestClient_Send(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	client := newTestClient(hub, "user-1", "conn-a")
 
 	env := ws.MustEnvelope(ws.TypeMessageNew, ws.MessageNewPayload{
@@ -36,7 +36,7 @@ func TestClient_Send(t *testing.T) {
 }
 
 func TestClient_sendRaw(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	client := newTestClient(hub, "user-1", "conn-a")
 
 	raw := []byte(`{"type":"pong"}`)
@@ -53,7 +53,7 @@ func TestClient_sendRaw(t *testing.T) {
 }
 
 func TestClient_Send_BufferFull(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	client := newTestClient(hub, "user-1", "conn-a")
 
 	env := ws.MustEnvelope(ws.TypeMessageNew, ws.MessageNewPayload{

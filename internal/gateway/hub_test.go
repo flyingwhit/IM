@@ -35,7 +35,7 @@ func waitRun() {
 // --- Register & Find ---
 
 func TestHub_RegisterAndFind(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -56,7 +56,7 @@ func TestHub_RegisterAndFind(t *testing.T) {
 }
 
 func TestHub_RegisterMultiple_SameUser(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -71,7 +71,7 @@ func TestHub_RegisterMultiple_SameUser(t *testing.T) {
 }
 
 func TestHub_RegisterMultiple_DifferentUsers(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -88,7 +88,7 @@ func TestHub_RegisterMultiple_DifferentUsers(t *testing.T) {
 }
 
 func TestHub_Find_NotFound(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -101,7 +101,7 @@ func TestHub_Find_NotFound(t *testing.T) {
 // --- Unregister ---
 
 func TestHub_Unregister(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -118,7 +118,7 @@ func TestHub_Unregister(t *testing.T) {
 }
 
 func TestHub_Unregister_LastConnectionClearsUser(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -149,7 +149,7 @@ func TestHub_Unregister_LastConnectionClearsUser(t *testing.T) {
 }
 
 func TestHub_Unregister_Nonexistent(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -166,7 +166,7 @@ func TestHub_Unregister_Nonexistent(t *testing.T) {
 // --- IsOnline ---
 
 func TestHub_IsOnline(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -185,7 +185,7 @@ func TestHub_IsOnline(t *testing.T) {
 // --- SendToUser ---
 
 func TestHub_SendToUser(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -212,7 +212,7 @@ func TestHub_SendToUser(t *testing.T) {
 }
 
 func TestHub_SendToUser_MultipleConnections(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -241,7 +241,7 @@ func TestHub_SendToUser_MultipleConnections(t *testing.T) {
 }
 
 func TestHub_SendToUser_OfflineUser(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	cancel := startHub(t, hub)
 	defer cancel()
 
@@ -258,7 +258,7 @@ func TestHub_SendToUser_OfflineUser(t *testing.T) {
 // --- Run shutdown ---
 
 func TestHub_Run_Shutdown(t *testing.T) {
-	hub := NewHub(nil)
+	hub := NewHub(nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
