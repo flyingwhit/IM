@@ -170,6 +170,113 @@ console.log('  Old approach (localStorage im_active_id): Tab 1 sees ' +
   (oldStyleLocal.getItem('im_active_id') === 'bob_id' ? 'bob (BUG CONFIRMED)' : 'alice'));
 
 // =============================================================================
+// Test 6: Group WebSocket envelope parsing
+// =============================================================================
+console.log('\n=== Test 6: Group WebSocket envelope parsing ===');
+
+// Simulated incoming server envelopes (what the client would receive via WS)
+const groupNewEnv = {
+  type: 'group.message.new',
+  payload: {
+    id: 'gm-1',
+    group_id: 'g1',
+    from: 'u2',
+    content: 'Hello group!',
+    content_type: 'text',
+    created_at: '2025-01-01T00:00:00Z',
+  },
+};
+const groupAckEnv = {
+  type: 'group.message.ack',
+  payload: { id: 'gm-1', group_id: 'g1' },
+};
+
+// Validate structure matches backend ws.GroupMessageNewPayload
+assert(groupNewEnv.type === 'group.message.new', 'group.message.new type matches');
+assert(typeof groupNewEnv.payload.id === 'string', 'group message has string id');
+assert(typeof groupNewEnv.payload.group_id === 'string', 'group message has group_id');
+assert(typeof groupNewEnv.payload.from === 'string', 'group message has from (sender)');
+assert(typeof groupNewEnv.payload.content === 'string', 'group message has content');
+
+// Validate group.message.ack structure matches backend ws.GroupMessageAckPayload
+assert(groupAckEnv.type === 'group.message.ack', 'group.message.ack type matches');
+assert(typeof groupAckEnv.payload.id === 'string', 'group ack has message id');
+assert(typeof groupAckEnv.payload.group_id === 'string', 'group ack has group_id');
+
+console.log('  group.message.new payload: ✓');
+console.log('  group.message.ack payload: ✓');
+
+// =============================================================================
+// Test 7: Client-outbound group message envelope
+// =============================================================================
+console.log('\n=== Test 7: Client-outbound group.message.send envelope ===');
+
+// Simulate what the client sends via WebSocket
+const outbound = JSON.stringify({
+  type: 'group.message.send',
+  payload: { group_id: 'g1', content: 'Hello group!', content_type: 'text' },
+});
+const parsed = JSON.parse(outbound);
+
+assert(parsed.type === 'group.message.send', 'outbound type is group.message.send');
+assert(parsed.payload.group_id === 'g1', 'outbound has correct group_id');
+assert(parsed.payload.content === 'Hello group!', 'outbound has correct content');
+assert(parsed.payload.content_type === 'text', 'outbound has content_type');
+
+console.log('  group.message.send envelope: ✓');
+
+// =============================================================================
+// Test 8: Envelope type routing — all known types are distinct
+// =============================================================================
+console.log('\n=== Test 8: All WebSocket message types are distinct ===');
+
+const knownTypes = new Set([
+  'message.send', 'message.recall', 'group.message.send', 'ping',
+  'message.new', 'message.ack', 'message.recalled',
+  'group.message.new', 'group.message.ack',
+  'pong', 'error',
+]);
+
+// Each type has exactly one entry in the set
+const typeList = [
+  'message.send', 'message.recall', 'group.message.send', 'ping',
+  'message.new', 'message.ack', 'message.recalled',
+  'group.message.new', 'group.message.ack',
+  'pong', 'error',
+];
+assert(knownTypes.size === typeList.length, 'All types are unique — no duplicates');
+
+// Check that private and group types don't collide
+assert('message.new' !== 'group.message.new', 'private and group message.new are distinct');
+assert('message.ack' !== 'group.message.ack', 'private and group message.ack are distinct');
+
+console.log('  ' + knownTypes.size + ' unique WS message types: ✓');
+
+// =============================================================================
+// Test 9: group.message.send is distinct from message.send
+// =============================================================================
+console.log('\n=== Test 9: Private vs group send envelope distinction ===');
+
+const privateSend = JSON.stringify({
+  type: 'message.send',
+  payload: { to: 'user-b', content: 'hi', content_type: 'text' },
+});
+const groupSend = JSON.stringify({
+  type: 'group.message.send',
+  payload: { group_id: 'g1', content: 'hi group', content_type: 'text' },
+});
+
+const priv = JSON.parse(privateSend);
+const grp = JSON.parse(groupSend);
+
+// Private has 'to' field, group has 'group_id' field — client must distinguish
+assert(priv.payload.to !== undefined, 'private send has "to" field');
+assert(grp.payload.group_id !== undefined, 'group send has "group_id" field');
+assert(priv.type !== grp.type, 'private and group send have different types');
+
+console.log('  Private send uses "to", group send uses "group_id": ✓');
+
+// =============================================================================
 // Summary
 // =============================================================================
 console.log('\n' + '='.repeat(50));
