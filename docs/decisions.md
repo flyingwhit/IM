@@ -178,3 +178,46 @@ Go 惯用法："close a channel to signal completion"。
 - 离线消息投递排除已撤回消息（`AND recalled_at IS NULL`）
 
 **取舍**：接收方离线时撤回不会在重连时推送 `message.recalled` 通知——但消息本身不会被投递（已从 offline delivery 排除）。对话历史重新加载时会正确显示。
+
+## 21. 跨实例消息路由：Redis Pub/Sub 广播
+
+**决策**：使用单一共享 Redis Pub/Sub channel (`im:deliver`) 做跨实例路由。所有网关实例发布到同一 channel，收到后尝试本地投递。消息包含 `SourceInstance` ID，源实例跳过以避免双重投递。
+
+**替代方案**：每实例独立 channel（需要知道所有实例 ID），或 Redis Streams（更强可靠但更复杂）。
+
+**原因**：
+- 广播是最简单的实现——新实例加入无需配置
+- Pub/Sub 无存储开销——消息已持久化在 DB
+- SourceInstance 过滤干净地解决双重投递
+- 对于学习项目规模，广播的浪费可忽略
+
+**取舍**：每条消息每个实例都会收到一个 Redis 消息。未来高吞吐时可切换为精确路由。
+
+## 22. Kafka 渐进式引入
+
+**决策**：不改变现有 DB 写入路径，Kafka 作为附加事件总线。Producer 是 fire-and-forget——失败只记日志，不阻塞消息发送。
+
+**替代方案**：
+- B1: 完全异步（Gateway 只写 Kafka，Worker 写 DB）——改变热路径语义，有消息丢失风险
+- B2: 可切换的双路径——过度设计，当前不需要
+
+**原因**：
+- DB 是真相源——已有事务保证，Kafka 是目前不需要的优化
+- Kafka 事件用于下游消费者（搜索索引、分析），不用于关键路径
+- 可随时升级到 B1——只需改变一个写入点
+
+**取舍**：每条消息多一次 Kafka produce 调用（<1ms，异步，不阻塞）。如果 Kafka 不可达，零影响。
+
+## 23. 单二进制多模式
+
+**决策**：一个二进制，通过 `SERVER_MODE` 环境变量选择模式（all/gateway/api/worker）。
+
+**替代方案**：多个独立二进制（`cmd/gateway`, `cmd/api`, `cmd/worker`）。
+
+**原因**：
+- 一个 Docker 镜像、多种部署方式
+- 开发阶段无需管理多个 go module 或构建目标
+- Go 的 switch 模式干净——不同入口共享所有代码
+- 未来可拆分为独立二进制（只需复制 main.go）
+
+**取舍**：所有模式的依赖都打包在一个二进制中（Kafka client、pgx、Redis）。大小可忽略（~20MB）。
