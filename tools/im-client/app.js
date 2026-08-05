@@ -360,7 +360,18 @@ async function handleApiClick(btn) {
   let path = btn.dataset.path;
   let body = null;
 
-  if (btn.dataset.pathParam) {
+  // Path parameter substitution — supports single {id}, double {gid}/{uid}, and {id} in middle
+  if (btn.dataset.pathParamDouble) {
+    // Two path params, e.g. "/groups/{gid}/members/{uid}"
+    const [id1, id2] = btn.dataset.pathParamDouble.split(',');
+    const v1 = document.getElementById(id1)?.value?.trim();
+    const v2 = document.getElementById(id2)?.value?.trim();
+    if (!v1 || !v2) {
+      showResponse(-1, 0, { error: 'Please fill in both required fields.' });
+      return;
+    }
+    path = path.replace('{gid}', v1).replace('{uid}', v2);
+  } else if (btn.dataset.pathParam) {
     const input = document.getElementById(btn.dataset.pathParam);
     if (!input || !input.value.trim()) {
       showResponse(-1, 0, { error: 'Please fill in the required field.' });
@@ -369,6 +380,7 @@ async function handleApiClick(btn) {
     path = path.replace('{id}', input.value.trim());
   }
 
+  // Query parameter builder — private messages
   if (btn.dataset.query === 'msg-query') {
     const peer = document.getElementById('msg-peer').value.trim();
     const before = document.getElementById('msg-before').value.trim();
@@ -383,23 +395,80 @@ async function handleApiClick(btn) {
     path = path + '?' + params.toString();
   }
 
-  if (btn.dataset.body === 'update-profile') {
-    const nickname = document.getElementById('update-nickname').value.trim();
-    const avatar = document.getElementById('update-avatar').value.trim();
-    body = {};
-    if (nickname) body.nickname = nickname;
-    if (avatar) body.avatar_url = avatar;
-    if (Object.keys(body).length === 0) {
-      showResponse(-1, 0, { error: 'Fill at least one field (nickname or avatar_url).' });
-      return;
+  // Query parameter builder — group messages
+  if (btn.dataset.query === 'group-msg-query') {
+    const before = document.getElementById('group-msgs-before').value.trim();
+    const limit = document.getElementById('group-msgs-limit').value;
+    const params = new URLSearchParams();
+    if (before) params.set('before', before);
+    params.set('limit', limit || '50');
+    path = path + '?' + params.toString();
+  }
+
+  // Request body builders
+  switch (btn.dataset.body) {
+    case 'update-profile': {
+      const nickname = document.getElementById('update-nickname').value.trim();
+      const avatar = document.getElementById('update-avatar').value.trim();
+      body = {};
+      if (nickname) body.nickname = nickname;
+      if (avatar) body.avatar_url = avatar;
+      if (Object.keys(body).length === 0) {
+        showResponse(-1, 0, { error: 'Fill at least one field (nickname or avatar_url).' });
+        return;
+      }
+      break;
     }
-  } else if (btn.dataset.body === 'friend-request') {
-    const targetId = document.getElementById('friend-target-id').value.trim();
-    if (!targetId) {
-      showResponse(-1, 0, { error: 'Target user ID is required.' });
-      return;
+    case 'friend-request': {
+      const targetId = document.getElementById('friend-target-id').value.trim();
+      if (!targetId) {
+        showResponse(-1, 0, { error: 'Target user ID is required.' });
+        return;
+      }
+      body = { target_id: targetId };
+      break;
     }
-    body = { target_id: targetId };
+    case 'rest-send-msg': {
+      const to = document.getElementById('rest-msg-to').value.trim();
+      const content = document.getElementById('rest-msg-content').value.trim();
+      if (!to || !content) {
+        showResponse(-1, 0, { error: 'Both "To" and "Content" are required.' });
+        return;
+      }
+      body = { to, content };
+      break;
+    }
+    case 'create-group': {
+      const name = document.getElementById('group-name').value.trim();
+      if (!name) {
+        showResponse(-1, 0, { error: 'Group name is required.' });
+        return;
+      }
+      const idsStr = document.getElementById('group-member-ids').value.trim();
+      body = {
+        name,
+        member_ids: idsStr ? idsStr.split(',').map(s => s.trim()).filter(Boolean) : [],
+      };
+      break;
+    }
+    case 'update-group': {
+      const name = document.getElementById('group-update-name').value.trim();
+      if (!name) {
+        showResponse(-1, 0, { error: 'New name is required.' });
+        return;
+      }
+      body = { name };
+      break;
+    }
+    case 'add-members': {
+      const idsStr = document.getElementById('group-addmem-uids').value.trim();
+      if (!idsStr) {
+        showResponse(-1, 0, { error: 'At least one user ID is required.' });
+        return;
+      }
+      body = { user_ids: idsStr.split(',').map(s => s.trim()).filter(Boolean) };
+      break;
+    }
   }
 
   await apiCall(method, path, body);
@@ -486,6 +555,15 @@ function handleWsMessage(env) {
       wsLog('recalled',
         `Message ${env.payload.message_id} recalled at ${env.payload.recalled_at}`);
       break;
+    case 'group.message.new':
+      wsLog('group-msg',
+        `[group: ${env.payload.group_id}] [from: ${env.payload.from}] ${env.payload.content}` +
+        ` (id=${env.payload.id})`);
+      break;
+    case 'group.message.ack':
+      wsLog('group-ack',
+        `Group message ${env.payload.id} to group ${env.payload.group_id} processed`);
+      break;
     case 'pong':
       break;
     case 'error':
@@ -534,6 +612,26 @@ function handleWsRecall(e) {
   document.getElementById('ws-recall-msg-id').value = '';
 }
 
+function handleWsGroupSend(e) {
+  e.preventDefault();
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    wsLog('error', 'Not connected.');
+    return;
+  }
+
+  const groupId = document.getElementById('ws-group-id').value.trim();
+  const content = document.getElementById('ws-group-content').value.trim();
+  if (!groupId || !content) return;
+
+  ws.send(JSON.stringify({
+    type: 'group.message.send',
+    payload: { group_id: groupId, content, content_type: 'text' },
+  }));
+  wsLog('sent', `[to group: ${groupId}] ${content}`);
+  document.getElementById('ws-group-content').value = '';
+  document.getElementById('ws-group-content').focus();
+}
+
 // --- Heartbeat (client-initiated ping every 30s) -----------------------------
 let heartbeatTimer = null;
 
@@ -564,6 +662,8 @@ function updateWsUI() {
   document.getElementById('btn-ws-send').disabled = !connected;
   const btnRecall = document.getElementById('btn-ws-recall');
   if (btnRecall) btnRecall.disabled = !connected;
+  const btnGroupSend = document.getElementById('btn-ws-group-send');
+  if (btnGroupSend) btnGroupSend.disabled = !connected;
 }
 
 // --- WebSocket Log -----------------------------------------------------------
@@ -626,6 +726,7 @@ function init() {
   document.getElementById('btn-ws-disconnect').addEventListener('click', disconnectWs);
   document.getElementById('form-ws-send').addEventListener('submit', handleWsSend);
   document.getElementById('form-ws-recall').addEventListener('submit', handleWsRecall);
+  document.getElementById('form-ws-group-send').addEventListener('submit', handleWsGroupSend);
   document.getElementById('btn-clear-log').addEventListener('click', clearWsLog);
 
   refreshSessionUI();

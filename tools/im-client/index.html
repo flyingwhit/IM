@@ -161,6 +161,103 @@
       <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/messages" data-query="msg-query">Send</button>
     </div>
 
+    <div class="card">
+      <h2>POST /api/v1/messages</h2>
+      <p class="desc">Send a private message via REST (alternative to WebSocket).</p>
+      <div class="form-row">
+        <input type="text" id="rest-msg-to" placeholder="To (user ID)">
+        <input type="text" id="rest-msg-content" placeholder="Content">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="POST" data-path="/api/v1/messages" data-body="rest-send-msg">Send</button>
+    </div>
+
+    <!-- Groups -->
+    <div class="section-header">Group Chat</div>
+
+    <div class="card">
+      <h2>POST /api/v1/groups</h2>
+      <p class="desc">Create a new group. Owner is added automatically.</p>
+      <div class="form-row">
+        <input type="text" id="group-name" placeholder="Group name (required)">
+        <input type="text" id="group-member-ids" placeholder="Member IDs (comma-separated)">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="POST" data-path="/api/v1/groups" data-body="create-group">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>GET /api/v1/groups</h2>
+      <p class="desc">List groups the current user is a member of.</p>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/groups">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>GET /api/v1/groups/:id</h2>
+      <p class="desc">Get group info (name, owner, created_at).</p>
+      <div class="form-row">
+        <input type="text" id="group-get-id" placeholder="Group ID">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/groups/{id}" data-path-param="group-get-id">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>PUT /api/v1/groups/:id</h2>
+      <p class="desc">Update group name (owner only).</p>
+      <div class="form-row">
+        <input type="text" id="group-update-id" placeholder="Group ID">
+        <input type="text" id="group-update-name" placeholder="New name">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="PUT" data-path="/api/v1/groups/{id}" data-path-param="group-update-id" data-body="update-group">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>DELETE /api/v1/groups/:id</h2>
+      <p class="desc">Delete a group (owner only).</p>
+      <div class="form-row">
+        <input type="text" id="group-delete-id" placeholder="Group ID">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="DELETE" data-path="/api/v1/groups/{id}" data-path-param="group-delete-id">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>POST /api/v1/groups/:id/members</h2>
+      <p class="desc">Add members to a group (owner/admin only).</p>
+      <div class="form-row">
+        <input type="text" id="group-addmem-id" placeholder="Group ID">
+        <input type="text" id="group-addmem-uids" placeholder="User IDs (comma-separated)">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="POST" data-path="/api/v1/groups/{id}/members" data-path-param="group-addmem-id" data-body="add-members">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>DELETE /api/v1/groups/:id/members/:uid</h2>
+      <p class="desc">Remove a member from a group.</p>
+      <div class="form-row">
+        <input type="text" id="group-rmmem-gid" placeholder="Group ID">
+        <input type="text" id="group-rmmem-uid" placeholder="User ID to remove">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="DELETE" data-path="/api/v1/groups/{gid}/members/{uid}" data-path-param-double="group-rmmem-gid,group-rmmem-uid">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>GET /api/v1/groups/:id/members</h2>
+      <p class="desc">List all members of a group.</p>
+      <div class="form-row">
+        <input type="text" id="group-listmem-id" placeholder="Group ID">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/groups/{id}/members" data-path-param="group-listmem-id">Send</button>
+    </div>
+
+    <div class="card">
+      <h2>GET /api/v1/groups/:id/messages</h2>
+      <p class="desc">Get group message history (paginated, newest-first).</p>
+      <div class="form-row">
+        <input type="text" id="group-msgs-id" placeholder="Group ID (required)">
+        <input type="text" id="group-msgs-before" placeholder="before cursor (optional)">
+        <input type="number" id="group-msgs-limit" placeholder="limit" min="1" max="100" value="50">
+      </div>
+      <button class="btn btn-sm api-btn" data-method="GET" data-path="/api/v1/groups/{id}/messages" data-path-param="group-msgs-id" data-query="group-msg-query">Send</button>
+    </div>
+
     <!-- Response display -->
     <div class="card response-card">
       <h2>Response</h2>
@@ -211,6 +308,18 @@
           <input type="text" id="ws-recall-msg-id" required placeholder="Message ID">
           <button type="submit" class="btn btn-warning" id="btn-ws-recall" disabled>Recall</button>
         </div>
+      </form>
+    </div>
+
+    <!-- Send Group Message -->
+    <div class="card">
+      <h2>Send Group Message</h2>
+      <form id="form-ws-group-send">
+        <label>Group ID:</label>
+        <input type="text" id="ws-group-id" required placeholder="Group ID">
+        <label>Content:</label>
+        <input type="text" id="ws-group-content" required placeholder="Hello group!">
+        <button type="submit" class="btn btn-primary" id="btn-ws-group-send" disabled>Send to Group</button>
       </form>
     </div>
 
