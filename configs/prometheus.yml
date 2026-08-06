@@ -1,0 +1,43 @@
+# Prometheus configuration for IM backend.
+#
+# Usage:
+#   docker run -v $(pwd)/configs/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+#
+# Or with docker-compose (see configs/docker-compose.observability.yml).
+
+global:
+  scrape_interval: 15s       # How often to scrape targets.
+  evaluation_interval: 15s   # How often to evaluate alert rules.
+  scrape_timeout: 10s
+
+# Alertmanager (optional — uncomment when you have alert rules).
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+# Rules are loaded from this directory.
+# rule_files:
+#   - "alerts/*.yml"
+
+scrape_configs:
+  # The IM backend exposes /metrics on the same port as the API.
+  #
+  # In production with multiple instances, use a service discovery mechanism
+  # (Kubernetes endpoints, Consul, DNS SRV) instead of static_configs.
+  # For docker-compose, the service name resolves via Docker DNS.
+  - job_name: "im-backend"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets:
+          - "host.docker.internal:8080"   # Mac/Windows Docker Desktop
+          # - "im-server:8080"            # Linux or docker-compose service name
+        labels:
+          service: "im"
+          # instance label is auto-populated from __address__
+
+  # Scrape Prometheus itself for self-monitoring.
+  - job_name: "prometheus"
+    static_configs:
+      - targets:
+          - "localhost:9090"

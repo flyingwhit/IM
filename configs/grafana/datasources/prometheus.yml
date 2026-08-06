@@ -1,0 +1,18 @@
+# Grafana provisioning — datasource for Prometheus.
+#
+# Mount this directory as a volume when running Grafana:
+#   docker run -v $(pwd)/configs/grafana:/etc/grafana/provisioning grafana/grafana
+#
+# Or use docker-compose (configs/docker-compose.observability.yml).
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
