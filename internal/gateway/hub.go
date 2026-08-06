@@ -96,6 +96,10 @@ func (h *Hub) Run(ctx context.Context) {
 			h.clients[client.userID][client.connID] = client
 			h.mu.Unlock()
 
+			// Update Prometheus metrics.
+			wsConnectionsActive.Inc()
+			wsConnectionsTotal.Inc()
+
 			if isFirst && h.presence != nil {
 				// Bound Redis calls so a slow/broken Redis doesn't
 				// stall the Hub event loop.
@@ -118,6 +122,9 @@ func (h *Hub) Run(ctx context.Context) {
 				}
 			}
 			h.mu.Unlock()
+
+			// Update Prometheus metrics.
+			wsConnectionsActive.Dec()
 
 			if becameOffline && h.presence != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)

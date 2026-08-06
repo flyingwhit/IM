@@ -99,6 +99,8 @@ func (c *Client) readPump() {
 			continue
 		}
 
+		wsMessagesReceived.Inc()
+
 		switch env.Type {
 		case ws.TypeMessageSend, ws.TypeMessageRecall, ws.TypeGroupMessageSend:
 			if c.hub.OnMessage != nil {
@@ -187,6 +189,7 @@ func (c *Client) sendRaw(data []byte) {
 	}()
 	select {
 	case c.send <- data:
+		wsMessagesSent.Inc()
 	default:
 		slog.Warn("client: send buffer full", "conn", c.connID)
 	}
