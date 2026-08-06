@@ -101,12 +101,14 @@ func (p *Producer) Publish(ctx context.Context, event *MessageEvent) {
 	// Use the message ID as the key for partitioning.
 	// Messages from the same sender will be ordered within a partition.
 	p.publishCount.Add(1)
+	kafkaPublishTotal.Inc()
 	err = p.writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte(event.SenderID),
 		Value: data,
 	})
 	if err != nil {
 		p.publishErrs.Add(1)
+		kafkaPublishErrors.Inc()
 		// Log but don't propagate — the message is already in PostgreSQL.
 		slog.Warn("kafka: publish failed", "msg_id", event.MessageID, "err", err)
 	}
