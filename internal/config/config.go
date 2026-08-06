@@ -17,6 +17,15 @@ type Config struct {
 	JWT     JWTConfig
 	Gateway GatewayConfig
 	Kafka   KafkaConfig
+	Log     LogConfig
+}
+
+// LogConfig holds logging settings.
+type LogConfig struct {
+	// Level is one of: debug, info, warn, error.
+	Level string
+	// Format is "json" or "text".
+	Format string
 }
 
 type ServerConfig struct {
@@ -158,6 +167,10 @@ func Load() (*Config, error) {
 			Brokers:       getEnv("KAFKA_BROKERS", ""),
 			TopicMessages: getEnv("KAFKA_TOPIC_MESSAGES", "im.messages"),
 			ConsumerGroup: getEnv("KAFKA_CONSUMER_GROUP", "im-worker"),
+		},
+		Log: LogConfig{
+			Level:  getEnv("LOG_LEVEL", "info"),
+			Format: getEnv("LOG_FORMAT", "text"),
 		},
 	}
 	return cfg, nil

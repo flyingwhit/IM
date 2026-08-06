@@ -13,7 +13,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
@@ -94,7 +94,7 @@ func (b *Broker) Subscribe(ctx context.Context, channel string, handler Handler)
 			delete(b.subs, channel)
 			b.mu.Unlock()
 			sub.Close()
-			log.Printf("broker: unsubscribed from %s", channel)
+			slog.Info("broker: unsubscribed", "channel", channel)
 		}()
 
 		ch := sub.Channel()
@@ -108,7 +108,7 @@ func (b *Broker) Subscribe(ctx context.Context, channel string, handler Handler)
 				}
 				var cm CrossMessage
 				if err := json.Unmarshal([]byte(msg.Payload), &cm); err != nil {
-					log.Printf("broker: parse error on %s: %v", channel, err)
+					slog.Warn("broker: parse error", "channel", channel, "err", err)
 					continue
 				}
 				// Skip self-delivery: the source instance already delivered
@@ -121,7 +121,7 @@ func (b *Broker) Subscribe(ctx context.Context, channel string, handler Handler)
 		}
 	}()
 
-	log.Printf("broker: subscribed to %s (instance=%s)", channel, b.instanceID)
+	slog.Info("broker: subscribed", "channel", channel, "instance", b.instanceID)
 }
 
 // InstanceID returns the broker's instance identifier.
@@ -136,7 +136,7 @@ func (b *Broker) Close() error {
 	defer b.mu.Unlock()
 	for channel, sub := range b.subs {
 		if err := sub.Close(); err != nil {
-			log.Printf("broker: close sub %s: %v", channel, err)
+			slog.Warn("broker: close sub error", "channel", channel, "err", err)
 		}
 		delete(b.subs, channel)
 	}

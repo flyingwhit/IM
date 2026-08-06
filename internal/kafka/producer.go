@@ -14,7 +14,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -61,7 +61,7 @@ type ProducerConfig struct {
 // returns nil — Kafka integration is disabled.
 func NewProducer(cfg ProducerConfig) *Producer {
 	if len(cfg.Brokers) == 0 {
-		log.Println("kafka: producer disabled (no brokers configured)")
+		slog.Info("kafka: producer disabled (no brokers configured)")
 		return nil
 	}
 
@@ -80,7 +80,7 @@ func NewProducer(cfg ProducerConfig) *Producer {
 		Compression: kafka.Snappy,
 	}
 
-	log.Printf("kafka: producer connected to %v (topic=%s)", cfg.Brokers, cfg.Topic)
+	slog.Info("kafka: producer connected", "brokers", cfg.Brokers, "topic", cfg.Topic)
 	return &Producer{writer: w}
 }
 
@@ -94,7 +94,7 @@ func (p *Producer) Publish(ctx context.Context, event *MessageEvent) {
 
 	data, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("kafka: marshal event %s: %v", event.MessageID, err)
+		slog.Error("kafka: marshal event", "msg_id", event.MessageID, "err", err)
 		return
 	}
 
@@ -108,7 +108,7 @@ func (p *Producer) Publish(ctx context.Context, event *MessageEvent) {
 	if err != nil {
 		p.publishErrs.Add(1)
 		// Log but don't propagate — the message is already in PostgreSQL.
-		log.Printf("kafka: publish %s: %v", event.MessageID, err)
+		slog.Warn("kafka: publish failed", "msg_id", event.MessageID, "err", err)
 	}
 }
 
@@ -126,6 +126,6 @@ func (p *Producer) Close() error {
 	if p == nil {
 		return nil
 	}
-	log.Println("kafka: closing producer")
+	slog.Info("kafka: closing producer")
 	return p.writer.Close()
 }

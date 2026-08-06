@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 	"github.com/ciel/im/internal/gateway"
 	"github.com/ciel/im/internal/handler"
 	kafkapkg "github.com/ciel/im/internal/kafka"
+	"github.com/ciel/im/internal/logging"
 	"github.com/ciel/im/internal/repository/postgres"
 	redisrepo "github.com/ciel/im/internal/repository/redis"
 	"github.com/ciel/im/internal/router"
@@ -34,7 +36,10 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	log.Printf("starting in %s mode", cfg.Server.Mode)
+	// Initialize structured logging before anything else.
+	// After this, all packages use slog instead of log.Printf.
+	logging.Init(cfg.Log.Level, cfg.Log.Format)
+	slog.Info("starting", "mode", cfg.Server.Mode)
 
 	switch cfg.Server.Mode {
 	case "worker":
@@ -59,7 +64,7 @@ func runAll(cfg *config.Config) error {
 		return fmt.Errorf("connect postgres: %w", err)
 	}
 	defer pool.Close()
-	log.Println("connected to PostgreSQL")
+	slog.Info("connected to PostgreSQL")
 
 	// Redis
 	redisClient, err := redisrepo.NewClient(ctx, cfg.Redis)
@@ -67,7 +72,7 @@ func runAll(cfg *config.Config) error {
 		return fmt.Errorf("connect redis: %w", err)
 	}
 	defer redisClient.Close()
-	log.Println("connected to Redis")
+	slog.Info("connected to Redis")
 
 	// Repositories
 	userRepo := postgres.NewUserRepo(pool)
@@ -135,7 +140,7 @@ func runAll(cfg *config.Config) error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("server listening on %s:%s", cfg.Server.Host, cfg.Server.Port)
+		slog.Info("server listening", "host", cfg.Server.Host, "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
@@ -145,19 +150,19 @@ func runAll(cfg *config.Config) error {
 	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
 	case <-quit:
-		log.Println("shutting down...")
+		slog.Info("shutting down...")
 	}
 
 	// Stop the Hub first so it stops accepting new WebSocket deliveries
 	// and unsubscribes from the broker before the HTTP server shuts down.
 	hubCancel()
-	log.Println("hub stopped")
+	slog.Info("hub stopped")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("shutdown: %v", err)
+		slog.Warn("shutdown error", "err", err)
 	}
 	return nil
 }
@@ -176,7 +181,7 @@ func runWorker(cfg *config.Config) error {
 		return fmt.Errorf("connect postgres: %w", err)
 	}
 	defer pool.Close()
-	log.Println("worker: connected to PostgreSQL")
+	slog.Info("worker: connected to PostgreSQL")
 	_ = pool // used by future handler logic
 
 	brokers := splitBrokers(cfg.Kafka.Brokers)
@@ -203,16 +208,16 @@ func runWorker(cfg *config.Config) error {
 
 	go func() {
 		<-quit
-		log.Println("worker: shutting down...")
+		slog.Info("worker: shutting down...")
 		cancel()
 	}()
 
-	log.Printf("worker: consuming from topic=%s group=%s", cfg.Kafka.TopicMessages, cfg.Kafka.ConsumerGroup)
+	slog.Info("worker: consuming", "topic", cfg.Kafka.TopicMessages, "group", cfg.Kafka.ConsumerGroup)
 
 	// handler processes each message event. Currently logs — future work
 	// includes indexing, analytics, and async notification dispatch.
 	handler := func(ctx context.Context, event *kafkapkg.MessageEvent) error {
-		log.Printf("worker: received %s msg=%s from=%s", event.Type, event.MessageID, event.SenderID)
+		slog.Debug("worker: received event", "type", event.Type, "msg_id", event.MessageID, "sender", event.SenderID)
 		// Future: write to Elasticsearch, update analytics counters, etc.
 		return nil
 	}

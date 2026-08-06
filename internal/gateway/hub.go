@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -101,11 +101,11 @@ func (h *Hub) Run(ctx context.Context) {
 				// stall the Hub event loop.
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				if err := h.presence.SetOnline(ctx, client.userID); err != nil {
-					log.Printf("hub: set online for user %s: %v", client.userID, err)
+					slog.Warn("hub: set online failed", "user", client.userID, "err", err)
 				}
 				cancel()
 			}
-			log.Printf("hub: client %s registered for user %s", client.connID, client.userID)
+			slog.Info("hub: client registered", "conn", client.connID, "user", client.userID)
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -122,11 +122,11 @@ func (h *Hub) Run(ctx context.Context) {
 			if becameOffline && h.presence != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				if err := h.presence.SetOffline(ctx, client.userID); err != nil {
-					log.Printf("hub: set offline for user %s: %v", client.userID, err)
+					slog.Warn("hub: set offline failed", "user", client.userID, "err", err)
 				}
 				cancel()
 			}
-			log.Printf("hub: client %s unregistered for user %s", client.connID, client.userID)
+			slog.Info("hub: client unregistered", "conn", client.connID, "user", client.userID)
 		}
 	}
 }
@@ -144,7 +144,7 @@ func (h *Hub) RefreshPresence(userID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := h.presence.Refresh(ctx, userID); err != nil {
-		log.Printf("hub: refresh presence for user %s: %v", userID, err)
+		slog.Warn("hub: refresh presence failed", "user", userID, "err", err)
 	}
 }
 
@@ -206,7 +206,7 @@ func (h *Hub) IsOnline(userID string) bool {
 func (h *Hub) SendToUser(userID string, env *ws.Envelope) {
 	data, err := json.Marshal(env)
 	if err != nil {
-		log.Printf("hub: marshal error for user %s: %v", userID, err)
+		slog.Error("hub: marshal error", "user", userID, "err", err)
 		return
 	}
 
@@ -222,7 +222,7 @@ func (h *Hub) SendToUser(userID string, env *ws.Envelope) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if err := h.broker.Publish(ctx, broker.DefaultChannel, userID, data); err != nil {
-			log.Printf("hub: broker publish error for user %s: %v", userID, err)
+			slog.Warn("hub: broker publish error", "user", userID, "err", err)
 		}
 	}
 }

@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -57,7 +57,7 @@ func (h *PresenceHandler) GetOnlineStatus(c *gin.Context) {
 			// Redis unavailable — log and return false rather than 500.
 			// The Hub already checked and found nothing, so this is
 			// the most accurate answer we can give.
-			log.Printf("presence: redis IsOnline error for user %s: %v", userID, err)
+			slog.Warn("presence: redis IsOnline error", "user", userID, "err", err)
 			c.JSON(http.StatusOK, gin.H{"user_id": userID, "online": false})
 			return
 		}

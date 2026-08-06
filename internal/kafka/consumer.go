@@ -3,7 +3,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -32,7 +32,7 @@ type EventHandler func(ctx context.Context, event *MessageEvent) error
 // returns nil — Kafka integration is disabled.
 func NewConsumer(cfg ConsumerConfig) *Consumer {
 	if len(cfg.Brokers) == 0 {
-		log.Println("kafka: consumer disabled (no brokers configured)")
+		slog.Info("kafka: consumer disabled (no brokers configured)")
 		return nil
 	}
 
@@ -50,7 +50,7 @@ func NewConsumer(cfg ConsumerConfig) *Consumer {
 		MaxBytes: 10e6, // 10 MB
 	})
 
-	log.Printf("kafka: consumer started (topic=%s, group=%s)", cfg.Topic, cfg.GroupID)
+	slog.Info("kafka: consumer started", "topic", cfg.Topic, "group", cfg.GroupID)
 	return &Consumer{reader: r}
 }
 
@@ -67,7 +67,7 @@ func (c *Consumer) Run(ctx context.Context, handler EventHandler) error {
 	}
 
 	defer func() {
-		log.Println("kafka: consumer stopped")
+		slog.Info("kafka: consumer stopped")
 	}()
 
 	for {
@@ -82,27 +82,27 @@ func (c *Consumer) Run(ctx context.Context, handler EventHandler) error {
 			if ctx.Err() != nil {
 				return nil // normal shutdown
 			}
-			log.Printf("kafka: fetch error: %v", err)
+			slog.Warn("kafka: fetch error", "err", err)
 			continue
 		}
 
 		var event MessageEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
-			log.Printf("kafka: parse error (offset=%d): %v", msg.Offset, err)
+			slog.Warn("kafka: parse error", "offset", msg.Offset, "err", err)
 			// Commit bad messages so we don't get stuck.
 			c.reader.CommitMessages(ctx, msg)
 			continue
 		}
 
 		if err := handler(ctx, &event); err != nil {
-			log.Printf("kafka: handler error for %s: %v", event.MessageID, err)
+			slog.Warn("kafka: handler error", "msg_id", event.MessageID, "err", err)
 			// Don't commit — retry on next poll.
 			continue
 		}
 
 		// Commit the offset after successful processing.
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
-			log.Printf("kafka: commit error: %v", err)
+			slog.Warn("kafka: commit error", "err", err)
 		}
 	}
 }
@@ -112,6 +112,6 @@ func (c *Consumer) Close() error {
 	if c == nil {
 		return nil
 	}
-	log.Println("kafka: closing consumer")
+	slog.Info("kafka: closing consumer")
 	return c.reader.Close()
 }

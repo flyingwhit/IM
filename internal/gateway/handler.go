@@ -3,7 +3,7 @@ package gateway
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -81,7 +81,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	// Upgrade to WebSocket
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("ws upgrade error: %v", err)
+		slog.Error("ws upgrade error", "err", err)
 		// Response already sent by upgrader at this point
 		return
 	}
@@ -90,7 +90,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	// UUIDs allow distinguishing multiple connections from the same user.
 	connID, err := generateConnID()
 	if err != nil {
-		log.Printf("ws connid error: %v", err)
+		slog.Error("ws connid error", "err", err)
 		conn.Close()
 		return
 	}
@@ -111,7 +111,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	go client.writePump()
 	go client.readPump()
 
-	log.Printf("ws: user %s connected (conn=%s)", userID, connID)
+	slog.Info("ws: user connected", "user", userID, "conn", connID)
 }
 
 // generateConnID creates a random hex connection identifier.

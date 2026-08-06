@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -116,7 +116,7 @@ func (s *MessageService) HandleIncomingMessage(senderID string, raw []byte) {
 	// 1. Parse envelope
 	var env ws.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		log.Printf("msg: parse error from user %s: %v", senderID, err)
+		slog.Warn("msg: parse error", "user", senderID, "err", err)
 		s.sendError(senderID, "parse_error", "invalid message format")
 		return
 	}
@@ -129,7 +129,7 @@ func (s *MessageService) HandleIncomingMessage(senderID string, raw []byte) {
 	case ws.TypeGroupMessageSend:
 		s.handleGroupSend(senderID, env)
 	default:
-		log.Printf("msg: unexpected type %s from user %s", env.Type, senderID)
+		slog.Warn("msg: unexpected type", "type", env.Type, "user", senderID)
 	}
 }
 
@@ -164,7 +164,7 @@ func (s *MessageService) SendMessage(ctx context.Context, senderID, to, content,
 	}
 	msg.Status = model.MessageStatusSent
 
-	log.Printf("msg: %s from %s to %s", truncate(msg.ID), senderID, to)
+	slog.Info("message sent", "msg_id", truncate(msg.ID), "sender", senderID, "receiver", to)
 
 	// 3.5 Publish to Kafka for downstream consumers (fire-and-forget).
 	s.kafkaProducer.Publish(ctx, &kafkapkg.MessageEvent{
@@ -181,7 +181,7 @@ func (s *MessageService) SendMessage(ctx context.Context, senderID, to, content,
 	if s.deliverToUser(to, msg) {
 		msg.Status = model.MessageStatusDelivered
 		if err := s.messageRepo.UpdateStatus(ctx, msg.ID, model.MessageStatusDelivered); err != nil {
-			log.Printf("msg: update status error: %v", err)
+			slog.Warn("msg: update status error", "err", err)
 		}
 	}
 
@@ -197,7 +197,7 @@ func (s *MessageService) SendMessage(ctx context.Context, senderID, to, content,
 func (s *MessageService) handleSend(senderID string, env ws.Envelope) {
 	var payload ws.MessageSendPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		log.Printf("msg: payload parse error from user %s: %v", senderID, err)
+		slog.Warn("msg: payload parse error", "user", senderID, "err", err)
 		s.sendError(senderID, "parse_error", "invalid payload")
 		return
 	}
@@ -240,7 +240,7 @@ func (s *MessageService) handleGroupSend(senderID string, env ws.Envelope) {
 
 	var payload ws.GroupMessageSendPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		log.Printf("group msg: payload parse error from user %s: %v", senderID, err)
+		slog.Warn("group msg: payload parse error", "user", senderID, "err", err)
 		s.sendError(senderID, "parse_error", "invalid payload")
 		return
 	}
@@ -258,7 +258,7 @@ func (s *MessageService) handleGroupSend(senderID string, env ws.Envelope) {
 	// 3. Check membership — sender must be a group member.
 	isMember, err := s.groupMemberRepo.IsMember(ctx, payload.GroupID, senderID)
 	if err != nil {
-		log.Printf("group msg: check member error: %v", err)
+		slog.Warn("group msg: check member error", "err", err)
 		s.sendError(senderID, "server_error", "failed to verify membership")
 		return
 	}
@@ -275,12 +275,12 @@ func (s *MessageService) handleGroupSend(senderID string, env ws.Envelope) {
 		ContentType: payload.ContentType,
 	}
 	if err := s.groupMessageRepo.Insert(ctx, msg); err != nil {
-		log.Printf("group msg: insert error for user %s: %v", senderID, err)
+		slog.Error("group msg: insert error", "user", senderID, "err", err)
 		s.sendError(senderID, "server_error", "failed to save message")
 		return
 	}
 
-	log.Printf("group msg: %s from %s to group %s", truncate(msg.ID), senderID, payload.GroupID)
+	slog.Info("group message sent", "msg_id", truncate(msg.ID), "sender", senderID, "group", payload.GroupID)
 
 	// 4.5 Publish to Kafka for downstream consumers (fire-and-forget).
 	s.kafkaProducer.Publish(ctx, &kafkapkg.MessageEvent{
@@ -296,7 +296,7 @@ func (s *MessageService) handleGroupSend(senderID string, env ws.Envelope) {
 	// 5. Route to online members (except the sender).
 	members, err := s.groupMemberRepo.ListMembers(ctx, payload.GroupID)
 	if err != nil {
-		log.Printf("group msg: list members error for group %s: %v", payload.GroupID, err)
+		slog.Warn("group msg: list members error", "group", payload.GroupID, "err", err)
 		// The message is persisted — members will see it via history API.
 	} else {
 		env := ws.MustEnvelope(ws.TypeGroupMessageNew, ws.GroupMessageNewPayload{
@@ -339,7 +339,7 @@ func (s *MessageService) handleRecall(senderID string, env ws.Envelope) {
 
 	var payload ws.MessageRecallPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		log.Printf("recall: payload parse error from user %s: %v", senderID, err)
+		slog.Warn("recall: payload parse error", "user", senderID, "err", err)
 		s.sendError(senderID, "parse_error", "invalid recall payload")
 		return
 	}
@@ -357,7 +357,7 @@ func (s *MessageService) handleRecall(senderID string, env ws.Envelope) {
 			s.sendError(senderID, "message_not_found", "message does not exist")
 			return
 		}
-		log.Printf("recall: find message error: %v", err)
+		slog.Warn("recall: find message error", "err", err)
 		s.sendError(senderID, "server_error", "failed to look up message")
 		return
 	}
@@ -389,13 +389,13 @@ func (s *MessageService) handleRecall(senderID string, env ws.Envelope) {
 			s.sendError(senderID, "message_not_found", "message does not exist")
 			return
 		}
-		log.Printf("recall: update error for msg %s: %v", truncate(msg.ID), err)
+		slog.Error("recall: update error", "msg_id", truncate(msg.ID), "err", err)
 		s.sendError(senderID, "server_error", "failed to recall message")
 		return
 	}
 
 	now := time.Now()
-	log.Printf("recall: msg %s recalled by %s", truncate(msg.ID), senderID)
+	slog.Info("message recalled", "msg_id", truncate(msg.ID), "sender", senderID)
 
 	// 7. Broadcast to both parties
 	s.sendRecallNotification(senderID, msg.ReceiverID, msg.ID, now)
@@ -430,15 +430,15 @@ func (s *MessageService) DeliverOfflineMessages(userID string) {
 	// 1. Deliver messages that were never delivered.
 	msgs, err := s.messageRepo.FindUndelivered(ctx, userID)
 	if err != nil {
-		log.Printf("msg: find undelivered error for user %s: %v", userID, err)
+		slog.Warn("msg: find undelivered error", "user", userID, "err", err)
 		return
 	}
 	if len(msgs) > 0 {
-		log.Printf("msg: delivering %d offline messages to user %s", len(msgs), userID)
+		slog.Info("msg: delivering offline messages", "count", len(msgs), "user", userID)
 		for _, msg := range msgs {
 			s.deliverToUser(userID, &msg)
 			if err := s.messageRepo.UpdateStatus(ctx, msg.ID, model.MessageStatusDelivered); err != nil {
-				log.Printf("msg: update status error for %s: %v", truncate(msg.ID), err)
+				slog.Warn("msg: update status error", "msg_id", truncate(msg.ID), "err", err)
 			}
 		}
 	}
@@ -448,11 +448,11 @@ func (s *MessageService) DeliverOfflineMessages(userID string) {
 	since := time.Now().Add(-recallNotificationWindow)
 	recalled, err := s.messageRepo.FindRecalledAfterDelivered(ctx, userID, since)
 	if err != nil {
-		log.Printf("msg: find recalled notifications error for user %s: %v", userID, err)
+		slog.Warn("msg: find recalled notifications error", "user", userID, "err", err)
 		return
 	}
 	if len(recalled) > 0 {
-		log.Printf("msg: pushing %d recall notifications to user %s", len(recalled), userID)
+		slog.Info("msg: pushing recall notifications", "count", len(recalled), "user", userID)
 		for _, msg := range recalled {
 			if msg.RecalledAt != nil {
 				// Only notify the reconnecting user (receiver). The sender

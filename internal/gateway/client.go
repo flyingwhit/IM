@@ -2,7 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -87,7 +87,7 @@ func (c *Client) readPump() {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("ws read error: %v (user=%s, conn=%s)", err, c.userID, c.connID)
+				slog.Warn("ws read error", "user", c.userID, "conn", c.connID, "err", err)
 			}
 			break
 		}
@@ -95,7 +95,7 @@ func (c *Client) readPump() {
 		// Parse the envelope to determine the message type.
 		var env ws.Envelope
 		if err := json.Unmarshal(message, &env); err != nil {
-			log.Printf("ws parse error: %v (user=%s)", err, c.userID)
+			slog.Warn("ws parse error", "user", c.userID, "err", err)
 			continue
 		}
 
@@ -109,7 +109,7 @@ func (c *Client) readPump() {
 			pong := ws.MustEnvelope(ws.TypePong, nil)
 			c.Send(pong)
 		default:
-			log.Printf("ws unknown type: %s (user=%s)", env.Type, c.userID)
+			slog.Warn("ws unknown type", "type", env.Type, "user", c.userID)
 		}
 	}
 }
@@ -143,14 +143,14 @@ func (c *Client) writePump() {
 				return
 			}
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("ws write error: %v (user=%s, conn=%s)", err, c.userID, c.connID)
+				slog.Warn("ws write error", "user", c.userID, "conn", c.connID, "err", err)
 				return
 			}
 
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Printf("ws ping error: %v (user=%s, conn=%s)", err, c.userID, c.connID)
+				slog.Warn("ws ping error", "user", c.userID, "conn", c.connID, "err", err)
 				return
 			}
 			// Refresh Redis presence TTL so long-lived connections
@@ -165,7 +165,7 @@ func (c *Client) writePump() {
 func (c *Client) Send(env *ws.Envelope) {
 	data, err := json.Marshal(env)
 	if err != nil {
-		log.Printf("client: marshal error: %v", err)
+		slog.Error("client: marshal error", "err", err)
 		return
 	}
 	c.sendRaw(data)
@@ -182,12 +182,12 @@ func (c *Client) Send(env *ws.Envelope) {
 func (c *Client) sendRaw(data []byte) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("client: send on closed channel for conn %s (recovered)", c.connID)
+			slog.Warn("client: send on closed channel (recovered)", "conn", c.connID)
 		}
 	}()
 	select {
 	case c.send <- data:
 	default:
-		log.Printf("client: send buffer full for conn %s", c.connID)
+		slog.Warn("client: send buffer full", "conn", c.connID)
 	}
 }
