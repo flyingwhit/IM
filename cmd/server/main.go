@@ -116,7 +116,7 @@ func runAll(cfg *config.Config) error {
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userRepo)
 	friendHandler := handler.NewFriendHandler(friendService)
-	healthHandler := handler.NewHealthHandler()
+	healthHandler := handler.NewHealthHandler(pool, redisClient, kafkaProducer)
 	wsHandler := gateway.NewHandler(authService, hub)
 	presenceHandler := handler.NewPresenceHandler(hub, presenceRepo)
 	messageHandler := handler.NewMessageHandler(messageService)

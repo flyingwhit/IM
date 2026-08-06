@@ -39,6 +39,7 @@ func Setup(
 
 	// Health check — no auth, no version prefix (infrastructure endpoint).
 	r.GET("/health", healthHandler.Check)
+	r.GET("/health/ready", healthHandler.Ready)
 
 	// WebSocket — no version prefix (protocol upgrade, not a REST API).
 	// Auth is handled inside the handler via query parameter token.
