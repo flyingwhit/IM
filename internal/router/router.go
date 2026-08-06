@@ -2,6 +2,7 @@ package router
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/ciel/im/internal/gateway"
 	"github.com/ciel/im/internal/handler"
@@ -23,9 +24,18 @@ func Setup(
 ) *gin.Engine {
 	r := gin.Default()
 
+	// HTTP metrics middleware — tracks RED (Rate/Errors/Duration)
+	// for all requests. Placed before CORS and auth so every request
+	// is counted (including 401s and CORS preflight).
+	r.Use(middleware.Metrics())
+
 	// CORS — allow cross-origin requests from the test client.
 	// The test client runs on file:// or varying localhost ports.
 	r.Use(middleware.CORS())
+
+	// Prometheus metrics endpoint — infrastructure, no auth.
+	// Prometheus scrapes this at regular intervals (typically 15s).
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Health check — no auth, no version prefix (infrastructure endpoint).
 	r.GET("/health", healthHandler.Check)
