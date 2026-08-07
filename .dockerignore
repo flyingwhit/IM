@@ -1,0 +1,26 @@
+# Git
+.git
+.gitignore
+
+# Documentation (not needed in the image)
+docs/
+
+# Config files (mounted at runtime, not baked into image)
+configs/
+
+# Environment files (injected at runtime)
+.env
+.env.example
+
+# Build artifacts and caches
+tmp/
+server
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
