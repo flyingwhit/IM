@@ -1,0 +1,13 @@
+# Override file for enabling Kafka.
+#
+# Usage:
+#   docker compose --profile kafka -f docker-compose.yml -f configs/docker-compose.kafka.yml up -d
+#
+# This sets KAFKA_BROKERS so the IM server connects to the Kafka broker.
+# Without this override, KAFKA_BROKERS remains empty and the app runs
+# without the message persistence pipeline.
+
+services:
+  server:
+    environment:
+      KAFKA_BROKERS: "kafka:9092"

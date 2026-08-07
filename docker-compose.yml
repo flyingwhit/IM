@@ -1,4 +1,6 @@
 services:
+  # ─── Infrastructure ───────────────────────────────────────────
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -14,6 +16,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -24,6 +27,94 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  # ─── Application ───────────────────────────────────────────
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8080"
+    environment:
+      # Server
+      SERVER_PORT: "8080"
+      SERVER_HOST: "0.0.0.0"
+      SERVER_MODE: all
+      # PostgreSQL (service name resolves via Docker DNS)
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: im
+      DB_PASSWORD: im_secret
+      DB_NAME: im_db
+      DB_SSLMODE: disable
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      # JWT
+      JWT_ACCESS_SECRET: change-me-access-secret-key
+      JWT_REFRESH_SECRET: change-me-refresh-secret-key
+      JWT_ACCESS_EXPIRY: 15m
+      JWT_REFRESH_EXPIRY: 168h
+      # Logging
+      LOG_LEVEL: debug
+      LOG_FORMAT: text
+      # Kafka (available when using --profile kafka)
+      KAFKA_BROKERS: ""
+      KAFKA_TOPIC_MESSAGES: im.messages
+      KAFKA_CONSUMER_GROUP: im-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Kafka (optional — profile: kafka) ────────────────────────
+  #
+  # Start with:
+  #   docker compose --profile kafka up -d
+  #
+  # Kafka is NOT on the critical path — the app works fine without it.
+  # Enable when you want to test the message persistence pipeline.
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.9.0
+    profiles: ["kafka"]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.9.0
+    profiles: ["kafka"]
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   pgdata:
