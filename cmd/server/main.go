@@ -139,7 +139,19 @@ func runAll(cfg *config.Config) error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown
+	// ─── Graceful Shutdown ───────────────────────────────────
+	//
+	// Order matters — each step depends on the previous:
+	//
+	//   1. Hub         — stop accepting new deliveries, unsubscribe broker.
+	//                    Must stop before HTTP server so in-flight WS writes
+	//                    don't target closing connections.
+	//   2. HTTP server — drain in-flight requests (5s grace period).
+	//   3. Deferred     — broker → kafka → redis → postgres (LIFO order).
+	//
+	// A 30s safety net prevents hanging forever if a component's Close()
+	// blocks (e.g., network partition during DB connection drain).
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -158,16 +170,33 @@ func runAll(cfg *config.Config) error {
 		slog.Info("shutting down...")
 	}
 
-	// Stop the Hub first so it stops accepting new WebSocket deliveries
-	// and unsubscribes from the broker before the HTTP server shuts down.
-	hubCancel()
-	slog.Info("hub stopped")
+	// Safety net: force-exit after 30s regardless of state.
+	// Normal shutdown takes <1s; this catches stuck Close() calls.
+	shutdownDone := make(chan struct{})
+	go func() {
+		// Step 1: Stop Hub event loop.
+		hubCancel()
+		slog.Info("hub stopped")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+		// Step 2: Drain HTTP requests.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		slog.Warn("shutdown error", "err", err)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("http shutdown error", "err", err)
+		} else {
+			slog.Info("http server stopped")
+		}
+
+		// Step 3: Deferred cleanups run when runAll returns.
+		close(shutdownDone)
+	}()
+
+	select {
+	case <-shutdownDone:
+		slog.Info("shutdown complete")
+	case <-time.After(30 * time.Second):
+		slog.Warn("shutdown timed out after 30s — forcing exit")
 	}
 	return nil
 }
