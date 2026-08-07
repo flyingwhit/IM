@@ -141,3 +141,66 @@ Refresh token 存 Redis 使用 `SET key value EX <seconds>`。TTL 过期后 Redi
 | `Client.send` | 256 | 解耦 Hub 路由和网络 I/O 速度 |
 
 **经验法则**：当发送方和接收方速度不同且发送方不应等待时，用缓冲。当你需要发送方阻塞作为反压时，不缓冲。
+
+## Docker：多阶段构建
+
+Go 的最终产物是一个静态二进制——不需要 Go SDK 来运行。Docker 多阶段构建利用这一点：
+
+- **Stage 1 (build)**：完整 Go 工具链，编译二进制。这一层的膨胀（~800MB）在最终镜像中被丢弃。
+- **Stage 2 (run)**：只拷贝二进制 + ca-certificates + tzdata。最终镜像 ~15MB。
+
+关键标志：
+- `CGO_ENABLED=0`：纯 Go 静态链接，不依赖 glibc。可以在 Alpine (musl libc) 或 scratch 上运行。
+- `-ldflags="-s -w"`：strip 调试信息，二进制缩小 ~30%。代价是 panic 时没有文件:行号——生产环境通过日志追踪，可接受。
+- `USER appuser`：容器内非 root。即使应用被 RCE，攻击者也拿不到容器 root 权限。
+
+## Docker Compose：profiles 实现可选服务
+
+Kafka 不是必须的——Phase 4 设计保证了 Kafka 故障不影响消息收发。用 `profiles: ["kafka"]` 让 Kafka+Zookeeper 默认不启动：
+
+```yaml
+kafka:
+  profiles: ["kafka"]
+```
+
+`docker compose up -d` 启动 PG + Redis + server。
+`docker compose --profile kafka up -d` 再加 Kafka。
+
+这比维护两个 docker-compose 文件更干净——基础服务始终相同，只是选择性添加 profile 服务。
+
+## CI/CD：Go 项目的 GitHub Actions
+
+Go CI 的流水线简单到只有三步：
+
+1. **Lint**：`golangci-lint` 聚合了多个 linter (govet, staticcheck, errcheck…)。发现问题在 CI 跑之前人工修复。
+2. **Test**：`go test -race -shuffle=on`。`-race` 检测数据竞争（慢 ~10x 但在 CI 值得），`-shuffle=on` 随机化测试顺序暴露隐式依赖。
+3. **Build**：`go build` 验证编译，不产生 artifact（CI 环境不需要二进制）。
+
+## Go：优雅关闭的关闭顺序
+
+关闭一个多组件 Go 服务不是随手 `defer` 那么简单。我们学到了三个原则：
+
+**1. 顺序很重要**。Hub 必须在 HTTP server 之前停——HTTP server 关闭时可能还有未完成的 WebSocket 关闭帧要写，如果 Hub 已经停了，send channel 已关闭，写会 panic。
+
+**2. Defer 是 LIFO**。Go 的 defer 栈是后进先出。所以正确的 defer 顺序是：`pool.Close() → redis.Close() → broker.Close() → hubCancel()`。执行时反转：hubCancel (先) → ... → pool.Close (后)。
+
+**3. 救命超时**。如果 `pool.Close()` 因为网络分区卡住 5 分钟，Kubernetes 最终会 SIGKILL。但在本地开发时进程就 hang 了。30 秒的 `select { case <-done: ... case <-time.After(30s): os.Exit(1) }` 是低成本保险。
+
+## Go：defer 与显式调用的配合
+
+`runAll()` 同时使用了 `defer hubCancel()` 和显式 `hubCancel()`。这看起来重复，但各有用途：
+
+- **defer**：保证函数提前返回时（如服务器启动失败）清理执行
+- **显式调用**：在优雅关闭中精确控制时机
+
+对 Context 的 cancel 函数调用多次是安全的（no-op after first call），所以两者不冲突。
+
+## Go：配置校验的模式
+
+配置校验采用 "warnings not errors" 原则：
+
+- 用默认 JWT secret 启动？打印警告但不阻止——开发环境 OK。
+- Access secret 和 refresh secret 相同？打印警告——生产环境应该不同。
+- Secret 太短（<16 字符）？打印警告——容易被暴力破解。
+
+**为什么不用 error 阻止启动？** 阻止启动意味着配置不完美的实例无法运行。在生产环境，配置由运维团队管理，错误阻止启动是正确的。在开发环境，开发者只想快速跑起来——warnings 提供可见性而不阻碍。

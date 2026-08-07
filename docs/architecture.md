@@ -243,5 +243,39 @@ Gateway ── DB write (同步) ──► PostgreSQL (source of truth)
 - **Phase 2（实时消息）**：✅ 完成。WebSocket 网关、在线状态、私聊、心跳、离线消息。
 - **Phase 3（消息系统）**：✅ 完成。消息持久化、撤回、对话历史、游标分页。
 - **Phase 4（可扩展性）**：✅ 完成。多网关实例（Redis Pub/Sub 跨实例路由）、Kafka 事件总线（异步消息管道）、多模式启动（all/gateway/api/worker）。
-- **Phase 5（可观测性）**：中间件层是添加 metrics/tracing/logging 的自然位置。
-- **Phase 6（生产就绪）**：Docker Compose、CI/CD、配置管理、优雅关闭、负载测试。
+- **Phase 5（可观测性）**：✅ 完成。结构化日志 (slog)、Prometheus metrics (RED 方法 + WebSocket + Kafka + Go runtime)、Grafana 配置、健康检查 (liveness + readiness)。
+- **Phase 6（生产就绪）**：✅ 完成。Dockerfile 多阶段构建、docker-compose 整合 (含可选 Kafka profile)、配置校验、优雅关闭 (30s 超时保护)、GitHub Actions CI、vegeta 负载测试脚本。
+
+## 部署架构
+
+### Docker 多阶段构建
+
+```
+Stage 1 (golang:1.26-alpine)        Stage 2 (alpine:3.22)
+  COPY go.mod go.sum ./                COPY --from=builder /app/server .
+  RUN go mod download                  RUN apk add ca-certificates tzdata
+  COPY . .                             USER appuser (非 root)
+  RUN go build -o server               EXPOSE 8080
+```
+
+最终镜像 ~15MB，不含编译工具。`CGO_ENABLED=0` 产生纯静态二进制，可运行在 Alpine (musl libc) 上。
+
+### docker-compose 服务编排
+
+```
+docker compose up -d                        # PG + Redis + IM server
+docker compose --profile kafka up -d         # 附加 Kafka + Zookeeper
+docker compose -f ... -f configs/docker-compose.observability.yml up -d  # 附加 Prometheus + Grafana
+```
+
+Kafka 通过 Docker Compose **profiles** 变为可选：不传 `--profile kafka` 时服务正常启动，Kafka 集成被禁用。
+
+### 优雅关闭顺序
+
+```
+1. Hub         — 停止接受 WebSocket 投递，退订 broker
+2. HTTP server — 排空进行中的请求 (5s grace)
+3. Deferred    — broker.Close → kafka.Close → redis.Close → pool.Close (LIFO)
+```
+
+30 秒总超时保护：任何 `Close()` 卡住时进程强制退出。
