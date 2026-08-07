@@ -1,0 +1,28 @@
+# golangci-lint configuration for IM backend.
+#
+# Keep it minimal — this is a learning project, not a monorepo.
+# We enable the high-signal linters and skip the pedantic ones.
+
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  enable:
+    - errcheck      # unchecked errors
+    - gosimple      # simplify code
+    - govet         # go vet
+    - ineffassign   # ineffectual assignments
+    - staticcheck   # static analysis (the big one)
+    - unused        # unused code
+    - gofmt         # format check
+    - misspell      # spelling mistakes
+
+linters-settings:
+  misspell:
+    locale: US
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
