@@ -41,6 +41,11 @@ func run() error {
 	logging.Init(cfg.Log.Level, cfg.Log.Format)
 	slog.Info("starting", "mode", cfg.Server.Mode)
 
+	// Print config warnings (e.g., default secrets in production).
+	for _, w := range cfg.Validate() {
+		slog.Warn("config: " + w)
+	}
+
 	switch cfg.Server.Mode {
 	case "worker":
 		return runWorker(cfg)

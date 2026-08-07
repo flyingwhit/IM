@@ -203,6 +203,44 @@ func parseDuration(s string, fallback time.Duration) time.Duration {
 	return d
 }
 
+// Validate checks the configuration for security and correctness issues.
+// It returns warnings, not errors — the app can start with warnings
+// (e.g., with default secrets in development).
+func (c *Config) Validate() []string {
+	var ws []string
+
+	// Security: default JWT secrets are fine for local dev but dangerous
+	// in any environment accessible from the network.
+	if c.JWT.AccessSecret == "change-me-access-secret-key" {
+		ws = append(ws, "JWT_ACCESS_SECRET is using the default value — anyone can forge tokens")
+	}
+	if c.JWT.RefreshSecret == "change-me-refresh-secret-key" {
+		ws = append(ws, "JWT_REFRESH_SECRET is using the default value — anyone can forge tokens")
+	}
+
+	// Access and refresh secrets should be different so that a leaked
+	// access key can't be used to refresh.
+	if c.JWT.AccessSecret == c.JWT.RefreshSecret {
+		ws = append(ws, "JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are identical — use different secrets")
+	}
+
+	// Short secrets are brute-forceable. 32 bytes = 256 bits is the
+	// minimum for HMAC-SHA256.
+	if len(c.JWT.AccessSecret) < 16 {
+		ws = append(ws, "JWT_ACCESS_SECRET is too short (<16 chars) — use at least 32 random characters")
+	}
+
+	return ws
+}
+
+// mask returns a masked version of a sensitive string.
+func mask(s string) string {
+	if len(s) <= 4 {
+		return "***"
+	}
+	return s[:2] + "***" + s[len(s)-2:]
+}
+
 // randomInstanceID generates a random 4-byte hex string for gateway instances.
 // In production, set GATEWAY_INSTANCE_ID explicitly (e.g., via Kubernetes pod name).
 // This default makes development zero-config while avoiding collisions.
