@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -150,7 +151,7 @@ func Load() (*Config, error) {
 			Host:     getEnv("REDIS_HOST", "localhost"),
 			Port:     getEnv("REDIS_PORT", "6379"),
 			Password: getEnv("REDIS_PASSWORD", ""),
-			DB:       0,
+			DB:       getEnvInt("REDIS_DB", 0),
 		},
 		JWT: JWTConfig{
 			AccessSecret:  accessSecret,
@@ -182,6 +183,20 @@ func getEnv(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+// getEnvInt returns the integer value of an environment variable or a default.
+// Invalid values are silently replaced with the default.
+func getEnvInt(key string, defaultVal int) int {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return defaultVal
+	}
+	return n
 }
 
 // requireEnv returns the value of a required environment variable.

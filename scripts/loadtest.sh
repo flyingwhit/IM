@@ -58,7 +58,7 @@ if ! $SKIP_REGISTER; then
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY")
 
-  TOKEN=$(echo "$REGISTER_RESP" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4 || true)
+  TOKEN=$(echo "$REGISTER_RESP" | jq -r '.access_token // empty' 2>/dev/null || true)
 
   if [ -z "$TOKEN" ]; then
     echo "Warning: Registration failed, skipping authenticated tests"

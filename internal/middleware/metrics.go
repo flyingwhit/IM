@@ -19,8 +19,23 @@ import (
 //   - go_memstats_heap_inuse_bytes: steady increase → memory leak
 //   - go_gc_duration_seconds: spikes → allocation pressure
 func init() {
-	prometheus.MustRegister(collectors.NewGoCollector())
-	prometheus.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	tryRegister(collectors.NewGoCollector())
+	tryRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+}
+
+// tryRegister registers a collector, silently ignoring duplicates.
+// prometheus.MustRegister panics on AlreadyRegisteredError, which
+// happens when tests in different packages import this package more
+// than once. tryRegister tolerates re-registration.
+func tryRegister(c prometheus.Collector) {
+	err := prometheus.Register(c)
+	if err == nil {
+		return
+	}
+	if _, ok := err.(prometheus.AlreadyRegisteredError); ok {
+		return
+	}
+	panic(err)
 }
 
 // HTTP metrics follow the RED method: Rate, Errors, Duration.
