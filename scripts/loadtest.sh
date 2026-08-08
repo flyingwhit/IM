@@ -53,7 +53,7 @@ if ! $SKIP_REGISTER; then
   USERNAME="loadtest-$(date +%s)"
   echo "--- Register User ($USERNAME) ---"
 
-  REGISTER_BODY="{\"username\":\"$USERNAME\",\"password\":\"testpass123\",\"nickname\":\"LoadTest\"}"
+  REGISTER_BODY="{\"username\":\"$USERNAME\",\"email\":\"$USERNAME@test.local\",\"password\":\"testpass123\",\"nickname\":\"LoadTest\"}"
   REGISTER_RESP=$(curl -s -X POST "$BASE_URL/api/v1/auth/register" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY")
