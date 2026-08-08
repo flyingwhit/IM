@@ -11,7 +11,7 @@
 #
 # Prerequisites:
 #   - IM server running (go run ./cmd/server or docker compose up -d)
-#   - vegeta in PATH
+#   - vegeta and jq in PATH
 
 set -euo pipefail
 
@@ -53,35 +53,52 @@ if ! $SKIP_REGISTER; then
   USERNAME="loadtest-$(date +%s)"
   echo "--- Register User ($USERNAME) ---"
 
-  REGISTER_BODY="{\"username\":\"$USERNAME\",\"password\":\"testpass123\",\"nickname\":\"LoadTest\"}"
+  REGISTER_BODY="{\"username\":\"$USERNAME\",\"email\":\"$USERNAME@test.local\",\"password\":\"testpass123\",\"nickname\":\"LoadTest\"}"
   REGISTER_RESP=$(curl -s -X POST "$BASE_URL/api/v1/auth/register" \
     -H "Content-Type: application/json" \
     -d "$REGISTER_BODY")
 
-  TOKEN=$(echo "$REGISTER_RESP" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4 || true)
-
-  if [ -z "$TOKEN" ]; then
+  # Check registration succeeded (response contains "id").
+  if ! echo "$REGISTER_RESP" | jq -e '.id' >/dev/null 2>&1; then
     echo "Warning: Registration failed, skipping authenticated tests"
     echo "Response: $REGISTER_RESP"
   else
-    echo "Got token: ${TOKEN:0:20}..."
+    echo "Registration OK, logging in..."
     echo ""
 
-    # ─── Step 3: Authenticated endpoints ────────────────────────
+    # ─── Step 3: Login to get JWT token ─────────────────────
+    # Registration returns user info; only login returns tokens.
 
-    echo "--- Get Profile (GET /api/v1/users/me) ---"
-    echo "GET $BASE_URL/api/v1/users/me
+    LOGIN_BODY="{\"username\":\"$USERNAME\",\"password\":\"testpass123\"}"
+    LOGIN_RESP=$(curl -s -X POST "$BASE_URL/api/v1/auth/login" \
+      -H "Content-Type: application/json" \
+      -d "$LOGIN_BODY")
+
+    TOKEN=$(echo "$LOGIN_RESP" | jq -r '.access_token // empty' 2>/dev/null || true)
+
+    if [ -z "$TOKEN" ]; then
+      echo "Warning: Login failed, skipping authenticated tests"
+      echo "Response: $LOGIN_RESP"
+    else
+      echo "Got token: ${TOKEN:0:20}..."
+
+      # ─── Step 4: Authenticated endpoints ─────────────────
+
+      echo ""
+      echo "--- Get Profile (GET /api/v1/users/me) ---"
+      echo "GET $BASE_URL/api/v1/users/me
 Authorization: Bearer $TOKEN" | vegeta attack -rate="$RATE" -duration="$DURATION" | vegeta report
 
-    echo ""
-    echo "--- List Friends (GET /api/v1/friends) ---"
-    echo "GET $BASE_URL/api/v1/friends
+      echo ""
+      echo "--- List Friends (GET /api/v1/friends) ---"
+      echo "GET $BASE_URL/api/v1/friends
 Authorization: Bearer $TOKEN" | vegeta attack -rate="$RATE" -duration="$DURATION" | vegeta report
 
-    echo ""
-    echo "--- List Groups (GET /api/v1/groups) ---"
-    echo "GET $BASE_URL/api/v1/groups
+      echo ""
+      echo "--- List Groups (GET /api/v1/groups) ---"
+      echo "GET $BASE_URL/api/v1/groups
 Authorization: Bearer $TOKEN" | vegeta attack -rate="$RATE" -duration="$DURATION" | vegeta report
+    fi
   fi
 fi
 

@@ -27,8 +27,9 @@ func init() {
 }
 
 // tryRegister calls prometheus.Register. If the collector is already
-// registered (e.g., by another library), the error is silently ignored.
-// Any other registration error causes a panic — those are programming bugs.
+// registered (e.g., by another library or by a test importing this package),
+// the error is silently ignored. Any other registration error causes a panic —
+// those are programming bugs.
 func tryRegister(c prometheus.Collector) {
 	err := prometheus.Register(c)
 	if err == nil {
