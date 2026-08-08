@@ -30,8 +30,8 @@ scrape_configs:
     metrics_path: "/metrics"
     static_configs:
       - targets:
-          - "host.docker.internal:8080"   # Mac/Windows Docker Desktop
-          # - "im-server:8080"            # Linux or docker-compose service name
+          - "host.docker.internal:8082"   # IM server (.env SERVER_PORT=8082)
+          # - "im-server:8082"            # Linux or docker-compose service name
         labels:
           service: "im"
           # instance label is auto-populated from __address__

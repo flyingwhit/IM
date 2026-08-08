@@ -14,13 +14,30 @@ import (
 // and process metrics (CPU, file descriptors). These are free observability
 // signals provided by the Prometheus client library.
 //
+// Uses a try-register pattern: some libraries (e.g., promhttp, promauto) may
+// already register these collectors. We register only if not already present.
+//
 // In production, watch:
 //   - go_goroutines: sustained growth → goroutine leak
 //   - go_memstats_heap_inuse_bytes: steady increase → memory leak
 //   - go_gc_duration_seconds: spikes → allocation pressure
 func init() {
-	prometheus.MustRegister(collectors.NewGoCollector())
-	prometheus.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	tryRegister(collectors.NewGoCollector())
+	tryRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+}
+
+// tryRegister calls prometheus.Register. If the collector is already
+// registered (e.g., by another library), the error is silently ignored.
+// Any other registration error causes a panic — those are programming bugs.
+func tryRegister(c prometheus.Collector) {
+	err := prometheus.Register(c)
+	if err == nil {
+		return
+	}
+	if _, ok := err.(prometheus.AlreadyRegisteredError); ok {
+		return
+	}
+	panic(err)
 }
 
 // HTTP metrics follow the RED method: Rate, Errors, Duration.
