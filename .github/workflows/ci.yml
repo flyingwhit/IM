@@ -29,8 +29,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      # v6 pins to golangci-lint v1.x, which matches our .golangci.yml config format.
-      # v7+ requires golangci-lint v2 with a different configuration schema.
+          # v7 uses golangci-lint v2.x — compatible with our .golangci.yml v2 config.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
