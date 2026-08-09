@@ -93,7 +93,7 @@ func (b *Broker) Subscribe(ctx context.Context, channel string, handler Handler)
 			b.mu.Lock()
 			delete(b.subs, channel)
 			b.mu.Unlock()
-			sub.Close()
+			_ = sub.Close()
 			slog.Info("broker: unsubscribed", "channel", channel)
 		}()
 

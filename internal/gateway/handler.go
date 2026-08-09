@@ -91,7 +91,7 @@ func (h *Handler) Handle(c *gin.Context) {
 	connID, err := generateConnID()
 	if err != nil {
 		slog.Error("ws connid error", "err", err)
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 

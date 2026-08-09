@@ -275,7 +275,7 @@ func TestMessageService_HandleIncomingMessage_ReceiverOffline(t *testing.T) {
 		t.Fatal("alice should have received an ACK")
 	}
 	var ack ws.MessageAckPayload
-	json.Unmarshal(aliceMsg.Payload, &ack)
+	_ = json.Unmarshal(aliceMsg.Payload, &ack)
 	if ack.Status != string(model.MessageStatusSent) {
 		t.Errorf("ack status = %s, want %s", ack.Status, model.MessageStatusSent)
 	}
@@ -300,7 +300,7 @@ func TestMessageService_HandleIncomingMessage_NotFriends(t *testing.T) {
 	}
 
 	var errPayload ws.ErrorPayload
-	json.Unmarshal(errMsg.Payload, &errPayload)
+	_ = json.Unmarshal(errMsg.Payload, &errPayload)
 	if errPayload.Code != "not_friends" {
 		t.Errorf("error code = %s, want not_friends", errPayload.Code)
 	}
@@ -337,7 +337,7 @@ func TestMessageService_HandleIncomingMessage_EmptyContent(t *testing.T) {
 	}
 
 	var errPayload ws.ErrorPayload
-	json.Unmarshal(errMsg.Payload, &errPayload)
+	_ = json.Unmarshal(errMsg.Payload, &errPayload)
 	if errPayload.Code != "invalid_message" {
 		t.Errorf("error code = %s, want invalid_message", errPayload.Code)
 	}
@@ -471,11 +471,11 @@ func TestMessageService_DeliverOfflineMessages_ChronologicalOrder(t *testing.T) 
 
 	// Verify oldest-first order: msg-old then msg-new.
 	var payload ws.MessageNewPayload
-	json.Unmarshal(envs[0].Payload, &payload)
+	_ = json.Unmarshal(envs[0].Payload, &payload)
 	if payload.ID != "msg-old" {
 		t.Errorf("first message: expected msg-old, got %s", payload.ID)
 	}
-	json.Unmarshal(envs[1].Payload, &payload)
+	_ = json.Unmarshal(envs[1].Payload, &payload)
 	if payload.ID != "msg-new" {
 		t.Errorf("second message: expected msg-new, got %s", payload.ID)
 	}
@@ -633,7 +633,7 @@ func TestMessageService_Recall_NotSender(t *testing.T) {
 		t.Fatal("bob should receive an error (not the sender)")
 	}
 	var errPayload ws.ErrorPayload
-	json.Unmarshal(errMsg.Payload, &errPayload)
+	_ = json.Unmarshal(errMsg.Payload, &errPayload)
 	if errPayload.Code != "not_sender" {
 		t.Errorf("error code = %s, want not_sender", errPayload.Code)
 	}
@@ -663,7 +663,7 @@ func TestMessageService_Recall_TimeExceeded(t *testing.T) {
 		t.Fatal("alice should receive recall_time_exceeded error")
 	}
 	var errPayload ws.ErrorPayload
-	json.Unmarshal(errMsg.Payload, &errPayload)
+	_ = json.Unmarshal(errMsg.Payload, &errPayload)
 	if errPayload.Code != "recall_time_exceeded" {
 		t.Errorf("error code = %s, want recall_time_exceeded", errPayload.Code)
 	}
@@ -682,7 +682,7 @@ func TestMessageService_Recall_MessageNotFound(t *testing.T) {
 		t.Fatal("alice should receive message_not_found error")
 	}
 	var errPayload ws.ErrorPayload
-	json.Unmarshal(errMsg.Payload, &errPayload)
+	_ = json.Unmarshal(errMsg.Payload, &errPayload)
 	if errPayload.Code != "message_not_found" {
 		t.Errorf("error code = %s, want message_not_found", errPayload.Code)
 	}
@@ -877,7 +877,7 @@ func TestMessageService_HandleSend_AckMatchesSendMessageStatus(t *testing.T) {
 			t.Fatal("alice should receive an ACK")
 		}
 		var ackPayload ws.MessageAckPayload
-		json.Unmarshal(ack.Payload, &ackPayload)
+		_ = json.Unmarshal(ack.Payload, &ackPayload)
 		if ackPayload.Status != string(model.MessageStatusDelivered) {
 			t.Errorf("ack status = %s, want %s", ackPayload.Status, model.MessageStatusDelivered)
 		}
@@ -896,7 +896,7 @@ func TestMessageService_HandleSend_AckMatchesSendMessageStatus(t *testing.T) {
 			t.Fatal("alice should receive an ACK")
 		}
 		var ackPayload ws.MessageAckPayload
-		json.Unmarshal(ack.Payload, &ackPayload)
+		_ = json.Unmarshal(ack.Payload, &ackPayload)
 		if ackPayload.Status != string(model.MessageStatusSent) {
 			t.Errorf("ack status = %s, want %s", ackPayload.Status, model.MessageStatusSent)
 		}

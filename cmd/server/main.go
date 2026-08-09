@@ -76,7 +76,7 @@ func runAll(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("connect redis: %w", err)
 	}
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 	slog.Info("connected to Redis")
 
 	// Repositories
@@ -90,7 +90,7 @@ func runAll(cfg *config.Config) error {
 
 	// Cross-instance message broker (Redis Pub/Sub).
 	msgBroker := broker.New(redisClient, cfg.Gateway.InstanceID)
-	defer msgBroker.Close()
+	defer func() { _ = msgBroker.Close() }()
 
 	// WebSocket Hub — runs until the hub context is canceled during shutdown.
 	hubCtx, hubCancel := context.WithCancel(context.Background())
@@ -104,7 +104,7 @@ func runAll(cfg *config.Config) error {
 		Topic:   cfg.Kafka.TopicMessages,
 	})
 	if kafkaProducer != nil {
-		defer kafkaProducer.Close()
+		defer func() { _ = kafkaProducer.Close() }()
 	}
 
 	// Services
@@ -231,7 +231,7 @@ func runWorker(cfg *config.Config) error {
 	if consumer == nil {
 		return fmt.Errorf("failed to create Kafka consumer")
 	}
-	defer consumer.Close()
+	defer func() { _ = consumer.Close() }()
 
 	// Handle shutdown gracefully.
 	quit := make(chan os.Signal, 1)

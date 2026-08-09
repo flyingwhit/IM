@@ -18,8 +18,8 @@ func TestLoad(t *testing.T) {
 		"JWT_REFRESH_SECRET": "refresh-secret",
 	}
 	for k, v := range envs {
-		os.Setenv(k, v)
-		defer os.Unsetenv(k)
+		_ = os.Setenv(k, v)
+		defer func(key string) { _ = os.Unsetenv(key) }(k)
 	}
 
 	cfg, err := Load()
@@ -45,7 +45,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestRequireEnvError(t *testing.T) {
-	os.Unsetenv("DB_HOST")
+	_ = os.Unsetenv("DB_HOST")
 	_, err := Load()
 	if err == nil {
 		t.Error("expected error for missing required env")

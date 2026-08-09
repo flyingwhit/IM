@@ -51,7 +51,7 @@ func TestCrossMessage_ShortFieldNames(t *testing.T) {
 	}
 
 	var raw map[string]json.RawMessage
-	json.Unmarshal(data, &raw)
+	_ = json.Unmarshal(data, &raw)
 
 	if _, ok := raw["si"]; !ok {
 		t.Error("expected short field name 'si' for SourceInstance")

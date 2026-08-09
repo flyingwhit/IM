@@ -15,7 +15,7 @@ func RunTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) er
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx) // safe no-op after Commit
+	defer func() { _ = tx.Rollback(ctx) }() // safe no-op after Commit
 
 	if err := fn(tx); err != nil {
 		return err

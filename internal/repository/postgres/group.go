@@ -34,7 +34,7 @@ func (r *GroupRepo) Create(ctx context.Context, name string, ownerID string) (*m
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var g model.Group
 	err = tx.QueryRow(ctx,
