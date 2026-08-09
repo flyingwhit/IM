@@ -204,3 +204,223 @@ Go CI 的流水线简单到只有三步：
 - Secret 太短（<16 字符）？打印警告——容易被暴力破解。
 
 **为什么不用 error 阻止启动？** 阻止启动意味着配置不完美的实例无法运行。在生产环境，配置由运维团队管理，错误阻止启动是正确的。在开发环境，开发者只想快速跑起来——warnings 提供可见性而不阻碍。
+
+---
+
+# 专题笔记
+
+以下是从 `docs/learning-note/` 合并进来的专题笔记。
+
+## Go Context — 超时、取消、值传递
+
+### Context 是什么
+
+每个请求的"通行证"，做三件事：
+
+| 能力 | 方法 | 场景 |
+|------|------|------|
+| 超时 | `WithTimeout` / `WithDeadline` | DB 查询最多等 2s |
+| 取消 | `WithCancel` | 用户断连，级联停止 |
+| 传值 | `WithValue` | trace ID, user ID |
+
+### 超时控制
+
+```go
+// hub.go — 用 1 秒超时保护事件循环
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()   // 用完必须释放
+err := h.presence.SetOnline(ctx, userID)
+```
+
+**为什么重要**：如果 Redis 挂了，`SetOnline` 会永久卡住。Hub 的事件循环是单 goroutine，卡住意味着所有用户无法注册/注销。1s 超时保证了"挂不可怕，但不能拖累别人"。
+
+### 取消传播
+
+```go
+// main.go
+hubCtx, hubCancel := context.WithCancel(context.Background())
+// hubCancel() → 所有 goroutine 级联退出
+```
+
+### 关键规则
+
+- **永远第一个参数**：`func A(ctx context.Context, ...)`
+- **不要存 struct 里**：context 是一次请求的，不是服务的
+- **用完 cancel**：`WithTimeout`/`WithCancel` 不 defer cancel() 会泄漏 goroutine
+- **不传 nil**：至少传 `context.Background()` 或 `context.TODO()`
+
+## Go Defer / Panic / Recover
+
+### 三者关系
+
+```
+panic("出事了")
+    │
+    ├── 没人 recover → 程序崩溃（stack trace）
+    └── 有人 recover → defer func() { recover() } 捕获，继续运行
+```
+
+### Defer — LIFO 栈
+
+```go
+defer A()   // 第3个执行
+defer B()   // 第2个执行
+defer C()   // 第1个执行
+```
+
+### 三个经典模式
+
+**资源清理**：
+```go
+pool, _ := postgres.NewPool(ctx, dsn)
+defer pool.Close()
+```
+
+**事务回滚**（最经典的 Go 模式）：
+```go
+tx, _ := pool.Begin(ctx)
+defer tx.Rollback(ctx)   // 先注册回滚
+if err := fn(tx); err != nil { return err }
+return tx.Commit(ctx)     // Rollback 在已提交的事务上是 no-op
+```
+
+**defer + recover**：
+```go
+defer func() {
+    if r := recover(); r != nil {
+        slog.Warn("send on closed channel (recovered)")
+    }
+}()
+c.send <- data   // 如果 channel 已关闭会 panic，recover 兜底
+```
+
+### Panic 使用规则
+
+| 用 panic | 用 error |
+|----------|----------|
+| 程序员的 bug | 运行时条件（网络超时） |
+| 启动时 / 不可恢复 | 可恢复 |
+
+### 面试重点
+
+- `defer` 的参数在 defer 语句执行时就求值
+- 命名返回值 + defer 可以修改返回值
+- panic 只用于不可恢复的编程错误
+- recover 只捕获当前 goroutine 的 panic
+
+## Go Error Handling — 不是异常，是返回值
+
+### 核心理念
+
+Go 没有 try-catch。error 就是一个普通返回值：
+
+```go
+val, err := someFunc()
+if err != nil { /* 你决定怎么处理 */ }
+```
+
+### `%w` vs `%v`
+
+```go
+err1 := errors.New("database connection refused")
+err2 := fmt.Errorf("query friend: %w", err1)  // %w 保留链
+err3 := fmt.Errorf("query friend: %v", err1)  // %v 打断链
+errors.Is(err2, err1)  // true
+errors.Is(err3, err1)  // false
+```
+
+**规则**：向上抛时用 `%w`；只打印日志时用 `%v`。
+
+### 项目中的错误设计
+
+```go
+var (
+    ErrNotFound     = errors.New("resource not found")
+    ErrInvalidInput = errors.New("invalid input")
+    ErrForbidden    = errors.New("forbidden")
+)
+
+type AppError struct {
+    Err     error   // 哨兵，机器判断用
+    Message string  // 给人看的
+}
+```
+
+### 面试要点
+
+- error 是值，不是异常
+- %w 保留错误链，errors.Is/As 能沿着链找
+- 哨兵用 errors.Is，自定义类型用 errors.As
+- 不要吞错误，除非明确不重要
+
+## Go Interface — 隐式满足 & 接口隔离
+
+### 核心概念
+
+Go 的接口是**隐式满足**的：不需要声明 `implements`，有方法就自动实现。
+
+### 项目例子：MessageRouter
+
+`service/routing.go` 定义接口，`gateway.Hub` 隐式满足：
+
+```go
+type MessageRouter interface {
+    SendToUser(userID string, env *ws.Envelope)
+    IsOnline(userID string) bool
+}
+```
+
+**好处**：`service` 包不需要 import `gateway` 包。
+
+### 接口隔离原则 (ISP)
+
+`service/message.go` 定义了 4 个小接口，而不是 1 个大接口。调用方不依赖不需要的方法。
+
+| 接口 | 生产实现 | 测试 fake |
+|------|---------|-----------|
+| `messageStore` | `*postgres.MessageRepo` | `fakeMessageStore` |
+| `friendChecker` | `*postgres.FriendRepo` | `fakeFriendChecker` |
+| `MessageRouter` | `*gateway.Hub` | `fakeRouter` |
+
+### 面试要点
+
+- 隐式满足：不改上游代码就能给已有类型实现新接口
+- 接口要小：Go 社区建议 1-3 个方法
+- 用接口做依赖注入：参数用接口，测试传 fake
+
+## Go Testing — 标准库 + 接口 = 可测试性
+
+### Table-Driven Tests（Go 标志模式）
+
+```go
+func TestValidate(t *testing.T) {
+    tests := []struct {
+        name    string
+        input   string
+        wantErr bool
+    }{{"empty", "", true}, {"valid", "hello", false}}
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) { /* ... */ })
+    }
+}
+```
+
+加新用例就是加一行 struct。
+
+### Fake 替代真实依赖
+
+```go
+type fakeMessageStore struct {
+    messages map[string]*model.Message
+}
+func (f *fakeMessageStore) Insert(_ ctx, msg) error { f.messages[msg.ID] = msg; return nil }
+```
+
+### 关键命令
+
+```bash
+go test ./...                  # 全跑
+go test ./internal/service/ -v # 一个包
+go test -run TestXxx -v        # 单个测试
+go test -cover                 # 覆盖率
+```
