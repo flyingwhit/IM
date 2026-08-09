@@ -1,3 +1,4 @@
+version: 3
 # golangci-lint configuration for IM backend.
 #
 # Keep it minimal — this is a learning project, not a monorepo.
