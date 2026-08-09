@@ -6,6 +6,9 @@
 #   3. build — go build to verify compilation
 #
 # Tests don't need PostgreSQL/Redis because unit tests use fakes.
+#
+# Uses go-version-file to read the exact Go version from go.mod,
+# ensuring CI always matches the development environment.
 
 name: CI
 
@@ -24,10 +27,12 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version-file: 'go.mod'
 
+      # v6 pins to golangci-lint v1.x, which matches our .golangci.yml config format.
+      # v7+ requires golangci-lint v2 with a different configuration schema.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
 
@@ -39,7 +44,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version-file: 'go.mod'
 
       - name: Run tests
         run: go test ./... -race -count=1 -shuffle=on
@@ -52,7 +57,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version-file: 'go.mod'
 
       - name: Build
         run: go build -o /dev/null ./cmd/server
