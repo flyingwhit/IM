@@ -1,2 +1,56 @@
+# ─── Binary & Build ───────────────────────────────────────────
+# Compiled binaries (Go builds, platform-specific)
+*.exe
+*.test
+*.out
+server
+/bin/
+/tmp/
+
+# ─── Environment & Secrets ────────────────────────────────────
+# .env contains real credentials in development.
+# Only .env.example (template) should be tracked.
+.env
+.env.local
+*.env.local
+
+# ─── OS Files ─────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ─── IDE & Editor ─────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ─── Go ───────────────────────────────────────────────────────
+# Dependency directories (Go 1.11+ modules)
+vendor/
+
+# ─── Misc ─────────────────────────────────────────────────────
+# Editor / ctags index files
 tags
+etags
+TAGS
+
+# Coverage profiles (go test -coverprofile)
+*.coverprofile
+coverage.out
+coverage.html
+
+# ─── Project-specific ─────────────────────────────────────────
+# AI assistant working files (transcripts, worktrees)
 /.claude/
+
+# Frontend (if monorepo, ignore until Phase 7)
+/frontend/
