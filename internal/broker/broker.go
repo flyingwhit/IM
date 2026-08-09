@@ -76,7 +76,7 @@ func (b *Broker) Publish(ctx context.Context, channel string, targetUser string,
 }
 
 // Subscribe starts a goroutine that listens on the given channel and calls
-// handler for each message. It blocks until ctx is cancelled, then cleans up.
+// handler for each message. It blocks until ctx is canceled, then cleans up.
 //
 // handler is called synchronously from the subscriber goroutine. If your
 // handler does I/O, spawn a goroutine inside it to avoid backpressure on

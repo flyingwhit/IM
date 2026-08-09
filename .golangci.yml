@@ -26,3 +26,16 @@ issues:
   exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
+  exclude-rules:
+    # Test files: os.Setenv, json.Unmarshal in tests don't need error checks.
+    - path: _test\.go
+      linters:
+        - errcheck
+    # Defer: Close/Rollback errors in defer are intentional (can't act on them).
+    - linters:
+        - errcheck
+      text: "Error return value of `.*\\.(Close|Rollback|SetReadDeadline|SetWriteDeadline)` is not checked"
+    # Defer: Close() via variable is fine.
+    - linters:
+        - errcheck
+      source: "defer"

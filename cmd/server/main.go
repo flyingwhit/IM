@@ -92,7 +92,7 @@ func runAll(cfg *config.Config) error {
 	msgBroker := broker.New(redisClient, cfg.Gateway.InstanceID)
 	defer msgBroker.Close()
 
-	// WebSocket Hub — runs until the hub context is cancelled during shutdown.
+	// WebSocket Hub — runs until the hub context is canceled during shutdown.
 	hubCtx, hubCancel := context.WithCancel(context.Background())
 	defer hubCancel()
 	hub := gateway.NewHub(presenceRepo, msgBroker)

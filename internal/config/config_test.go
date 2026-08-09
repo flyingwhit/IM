@@ -10,12 +10,12 @@ import (
 func TestLoad(t *testing.T) {
 	// Set required env vars
 	envs := map[string]string{
-		"DB_HOST":             "localhost",
-		"DB_USER":             "testuser",
-		"DB_PASSWORD":         "testpass",
-		"DB_NAME":             "testdb",
-		"JWT_ACCESS_SECRET":   "access-secret",
-		"JWT_REFRESH_SECRET":  "refresh-secret",
+		"DB_HOST":            "localhost",
+		"DB_USER":            "testuser",
+		"DB_PASSWORD":        "testpass",
+		"DB_NAME":            "testdb",
+		"JWT_ACCESS_SECRET":  "access-secret",
+		"JWT_REFRESH_SECRET": "refresh-secret",
 	}
 	for k, v := range envs {
 		os.Setenv(k, v)

@@ -15,7 +15,6 @@ const (
 
 	// presenceOpTimeout bounds Redis operations in the Hub event loop.
 	// A slow/broken Redis must not stall register/unregister processing.
-	presenceOpTimeout = 1 * time.Second
 )
 
 // PresenceRepo manages online/offline status in Redis.

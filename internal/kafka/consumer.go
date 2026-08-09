@@ -54,7 +54,7 @@ func NewConsumer(cfg ConsumerConfig) *Consumer {
 	return &Consumer{reader: r}
 }
 
-// Run starts a blocking consume loop. It returns when ctx is cancelled
+// Run starts a blocking consume loop. It returns when ctx is canceled
 // or handler returns a fatal error.
 //
 // Offsets are committed automatically after each message is processed.
@@ -90,7 +90,7 @@ func (c *Consumer) Run(ctx context.Context, handler EventHandler) error {
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			slog.Warn("kafka: parse error", "offset", msg.Offset, "err", err)
 			// Commit bad messages so we don't get stuck.
-			c.reader.CommitMessages(ctx, msg)
+			_ = c.reader.CommitMessages(ctx, msg)
 			continue
 		}
 

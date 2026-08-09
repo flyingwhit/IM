@@ -5,13 +5,13 @@ import "errors"
 // Domain errors — used across all layers to signal specific business failures.
 // Each error wraps a sentinel so callers can use errors.Is to check.
 var (
-	ErrNotFound       = errors.New("resource not found")
-	ErrDuplicate      = errors.New("resource already exists")
-	ErrInvalidInput   = errors.New("invalid input")
-	ErrUnauthorized   = errors.New("unauthorized")
-	ErrForbidden      = errors.New("forbidden")
-	ErrTokenExpired   = errors.New("token expired")
-	ErrConflict       = errors.New("conflict") // e.g. already friends
+	ErrNotFound     = errors.New("resource not found")
+	ErrDuplicate    = errors.New("resource already exists")
+	ErrInvalidInput = errors.New("invalid input")
+	ErrUnauthorized = errors.New("unauthorized")
+	ErrForbidden    = errors.New("forbidden")
+	ErrTokenExpired = errors.New("token expired")
+	ErrConflict     = errors.New("conflict") // e.g. already friends
 )
 
 // AppError wraps a sentinel error with a user-facing message.

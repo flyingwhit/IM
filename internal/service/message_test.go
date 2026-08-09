@@ -481,7 +481,6 @@ func TestMessageService_DeliverOfflineMessages_ChronologicalOrder(t *testing.T) 
 	}
 }
 
-
 // --- Recall notification delivery on reconnect ---
 
 func TestMessageService_DeliverOfflineMessages_RecallNotifications(t *testing.T) {

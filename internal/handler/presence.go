@@ -18,8 +18,8 @@ type onlineChecker interface {
 
 // PresenceHandler handles online status HTTP endpoints.
 type PresenceHandler struct {
-	hub          onlineChecker            // local Hub (fast, no network)
-	presenceRepo *redisrepo.PresenceRepo  // Redis fallback (multi-instance)
+	hub          onlineChecker           // local Hub (fast, no network)
+	presenceRepo *redisrepo.PresenceRepo // Redis fallback (multi-instance)
 }
 
 // NewPresenceHandler creates a PresenceHandler.

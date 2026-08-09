@@ -21,13 +21,13 @@ const (
 	TypePing             MessageType = "ping"               // heartbeat
 
 	// Server → Client
-	TypeMessageNew      MessageType = "message.new"      // incoming private message
-	TypeMessageAck      MessageType = "message.ack"      // delivery confirmation
-	TypeMessageRecalled MessageType = "message.recalled" // notification that a message was recalled
+	TypeMessageNew      MessageType = "message.new"       // incoming private message
+	TypeMessageAck      MessageType = "message.ack"       // delivery confirmation
+	TypeMessageRecalled MessageType = "message.recalled"  // notification that a message was recalled
 	TypeGroupMessageNew MessageType = "group.message.new" // incoming group message
 	TypeGroupMessageAck MessageType = "group.message.ack" // group message confirmation
-	TypePong            MessageType = "pong"             // heartbeat response
-	TypeError           MessageType = "error"            // server-side error
+	TypePong            MessageType = "pong"              // heartbeat response
+	TypeError           MessageType = "error"             // server-side error
 )
 
 // Envelope is the top-level structure for every WebSocket message.

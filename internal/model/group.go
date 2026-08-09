@@ -32,13 +32,13 @@ type GroupMember struct {
 // have a different receiver model (group vs user) and different
 // delivery semantics (broadcast to N members vs push to 1).
 type GroupMessage struct {
-	ID          string     `json:"id"`
-	GroupID     string     `json:"group_id"`
-	SenderID    string     `json:"from"`
-	Content     string     `json:"content"`
-	ContentType string     `json:"content_type"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID          string    `json:"id"`
+	GroupID     string    `json:"group_id"`
+	SenderID    string    `json:"from"`
+	Content     string    `json:"content"`
+	ContentType string    `json:"content_type"`
+	CreatedAt   time.Time `json:"created_at"`
 	// RecalledAt is set when the sender recalls the message.
 	// nil means the message has not been recalled.
-	RecalledAt  *time.Time `json:"recalled_at,omitempty"`
+	RecalledAt *time.Time `json:"recalled_at,omitempty"`
 }

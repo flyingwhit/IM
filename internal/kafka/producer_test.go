@@ -1,13 +1,14 @@
 package kafka
 
 import (
+	"context"
 	"testing"
 )
 
 func TestProducer_NilSafety(t *testing.T) {
 	// Publish on a nil producer should not panic.
 	var p *Producer
-	p.Publish(nil, &MessageEvent{
+	p.Publish(context.TODO(), &MessageEvent{
 		Type:      "message.sent",
 		MessageID: "msg-1",
 		SenderID:  "alice",
@@ -29,7 +30,7 @@ func TestProducer_Close_Nil(t *testing.T) {
 
 func TestConsumer_NilSafety(t *testing.T) {
 	// Run on a nil consumer should not panic; it should block until ctx done.
-	// We use an already-cancelled context so it returns immediately.
+	// We use an already-canceled context so it returns immediately.
 	var c *Consumer
 	// We can't test Run easily without real Kafka, but we verify
 	// that Close on nil doesn't panic.

@@ -99,13 +99,13 @@ type JWTConfig struct {
 // It returns an error if required values are missing.
 func Load() (*Config, error) {
 	var (
-		dbHost          string
-		dbUser          string
-		dbPassword      string
-		dbName          string
-		accessSecret    string
-		refreshSecret   string
-		err             error
+		dbHost        string
+		dbUser        string
+		dbPassword    string
+		dbName        string
+		accessSecret  string
+		refreshSecret string
+		err           error
 	)
 
 	dbHost, err = requireEnv("DB_HOST")
