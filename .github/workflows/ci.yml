@@ -32,7 +32,7 @@ jobs:
       # v6 pins to golangci-lint v1.x, which matches our .golangci.yml config format.
       # v7+ requires golangci-lint v2 with a different configuration schema.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: latest
 
