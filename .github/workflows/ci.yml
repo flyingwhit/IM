@@ -29,11 +29,11 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-          # v7 uses golangci-lint v2.x — compatible with our .golangci.yml v2 config.
+      # v7 uses golangci-lint v2.x — compatible with our .golangci.yml v2 config.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.12.2
 
   test:
     name: Test
