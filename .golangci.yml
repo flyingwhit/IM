@@ -13,11 +13,10 @@ linters:
     - staticcheck
     - unused
     - misspell
+  settings:
+    misspell:
+      locale: US
 
 formatters:
   enable:
     - gofmt
-
-linters-settings:
-  misspell:
-    locale: US
